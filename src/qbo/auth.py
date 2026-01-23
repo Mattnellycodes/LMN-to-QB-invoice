@@ -55,6 +55,8 @@ def get_auth_client() -> AuthClient:
     client_id = os.getenv("QBO_CLIENT_ID")
     client_secret = os.getenv("QBO_CLIENT_SECRET")
     redirect_uri = os.getenv("QBO_REDIRECT_URI")
+    # Use "sandbox" for developer/test companies, "production" for real companies
+    environment = os.getenv("QBO_ENVIRONMENT", "production")
 
     missing = []
     if not client_id:
@@ -71,7 +73,7 @@ def get_auth_client() -> AuthClient:
         client_id=client_id,
         client_secret=client_secret,
         redirect_uri=redirect_uri,
-        environment="production",
+        environment=environment,
     )
 
 

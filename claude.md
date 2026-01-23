@@ -130,6 +130,7 @@ Create a .env file (never commit this):
 QBO_CLIENT_ID=your_client_id
 QBO_CLIENT_SECRET=your_client_secret
 QBO_REDIRECT_URI=https://lmn-to-qb-invoice.onrender.com/qbo/callback
+QBO_ENVIRONMENT=sandbox  # Use "sandbox" for dev/test, "production" for real companies
 
 For production (Render):
 DATABASE_URL=postgresql://...  (auto-set when you link a PostgreSQL database)

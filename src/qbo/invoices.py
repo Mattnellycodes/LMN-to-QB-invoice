@@ -10,8 +10,7 @@ import requests
 
 from src.invoice.line_items import InvoiceData, LineItem
 from src.qbo.context import get_qbo_credentials
-
-QBO_API_BASE = "https://quickbooks.api.intuit.com/v3/company"
+from src.qbo.customers import get_api_base_url
 
 
 @dataclass
@@ -66,7 +65,7 @@ def create_draft_invoice(
         "PrivateNote": f"Created from LMN export. JobsiteID: {invoice_data.jobsite_id}",
     }
 
-    url = f"{QBO_API_BASE}/{realm_id}/invoice"
+    url = f"{get_api_base_url()}/{realm_id}/invoice"
 
     try:
         response = requests.post(
@@ -167,7 +166,7 @@ def get_item_by_name(item_name: str) -> Optional[Dict]:
     safe_name = item_name.replace("'", "\\'")
     query = f"SELECT * FROM Item WHERE Name = '{safe_name}'"
 
-    url = f"{QBO_API_BASE}/{realm_id}/query"
+    url = f"{get_api_base_url()}/{realm_id}/query"
 
     response = requests.get(
         url,

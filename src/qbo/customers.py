@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+import os
 from typing import Dict, List, Optional
 
 import requests
 
 from src.qbo.context import get_qbo_credentials
 
-QBO_API_BASE = "https://quickbooks.api.intuit.com/v3/company"
+
+def get_api_base_url() -> str:
+    """Get the QBO API base URL based on environment setting."""
+    environment = os.getenv("QBO_ENVIRONMENT", "production")
+    if environment == "sandbox":
+        return "https://sandbox-quickbooks.api.intuit.com/v3/company"
+    return "https://quickbooks.api.intuit.com/v3/company"
 
 
 def get_all_customers() -> List[Dict]:
@@ -25,7 +32,7 @@ def get_all_customers() -> List[Dict]:
 
     while True:
         query = f"SELECT * FROM Customer STARTPOSITION {start_position} MAXRESULTS {max_results}"
-        url = f"{QBO_API_BASE}/{realm_id}/query"
+        url = f"{get_api_base_url()}/{realm_id}/query"
 
         response = requests.get(
             url,
@@ -57,7 +64,7 @@ def get_customer_by_id(customer_id: str) -> Optional[Dict]:
     """Fetch a single customer by QBO ID."""
     access_token, realm_id = get_qbo_credentials()
 
-    url = f"{QBO_API_BASE}/{realm_id}/customer/{customer_id}"
+    url = f"{get_api_base_url()}/{realm_id}/customer/{customer_id}"
 
     response = requests.get(
         url,
@@ -81,7 +88,7 @@ def search_customers_by_name(name: str) -> List[Dict]:
     safe_name = name.replace("'", "\\'")
     query = f"SELECT * FROM Customer WHERE DisplayName LIKE '%{safe_name}%'"
 
-    url = f"{QBO_API_BASE}/{realm_id}/query"
+    url = f"{get_api_base_url()}/{realm_id}/query"
 
     response = requests.get(
         url,
