@@ -39,14 +39,61 @@ Copy `.env.example` to `.env` and add your QBO credentials:
 
 ```bash
 cp .env.example .env
-# Edit .env with your credentials
 ```
 
-Run the OAuth setup:
+Required environment variables:
+```
+QBO_CLIENT_ID=your_client_id
+QBO_CLIENT_SECRET=your_client_secret
+QBO_REDIRECT_URI=https://lmn-to-qb-invoice.onrender.com/qbo/callback
+```
+
+#### OAuth Authentication
+
+Run the interactive OAuth setup:
 
 ```bash
 python -m src.qbo.auth setup
 ```
+
+This will:
+1. Open your browser to the QuickBooks authorization page
+2. Prompt you to sign in and authorize the app
+3. Capture the callback and exchange the code for tokens
+4. Save tokens locally to `config/.qbo_tokens.json`
+
+#### OAuth CLI Commands
+
+```bash
+# Interactive OAuth authorization
+python -m src.qbo.auth setup
+
+# Export tokens for Render deployment
+python -m src.qbo.auth export
+
+# Manually refresh access token
+python -m src.qbo.auth refresh
+
+# Clear stored tokens
+python -m src.qbo.auth clear
+```
+
+#### Deploying to Render
+
+After running `setup` locally, export tokens for Render:
+
+```bash
+python -m src.qbo.auth export
+```
+
+Copy the output environment variables to your Render service:
+- `QBO_ACCESS_TOKEN`
+- `QBO_REFRESH_TOKEN`
+- `QBO_REALM_ID`
+- `QBO_TOKEN_EXPIRES_AT`
+- `QBO_REFRESH_EXPIRES_AT`
+
+See [docs/QB_OAuth.md](docs/QB_OAuth.md) for full OAuth implementation details.
 
 ### 4. Set Up Customer Mapping
 

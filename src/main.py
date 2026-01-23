@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -14,6 +13,10 @@ from src.mapping.customer_mapping import (
     load_customer_mapping,
     get_qbo_customer_id,
     find_unmapped_jobsites,
+)
+from src.mapping.interactive_mapping import (
+    build_unmapped_context,
+    prompt_interactive_mapping,
 )
 from src.qbo.invoices import create_draft_invoice, InvoiceResult
 
@@ -63,11 +66,16 @@ def process_lmn_exports(
     mappings = load_customer_mapping(mapping_path)
     print(f"  Loaded {len(mappings)} mappings")
 
-    # Check for unmapped jobsites
+    # Check for unmapped jobsites and prompt for mapping
     jobsite_ids = [jh.jobsite_id for jh in jobsite_hours]
     unmapped = find_unmapped_jobsites(jobsite_ids, mappings)
     if unmapped:
-        print(f"  WARNING: {len(unmapped)} jobsites not in mapping")
+        unmapped_context = build_unmapped_context(jobsite_hours, unmapped)
+        mappings = prompt_interactive_mapping(
+            unmapped_context=unmapped_context,
+            existing_mappings=mappings,
+            mapping_path=mapping_path,
+        )
 
     # Build invoice data
     print()
@@ -157,59 +165,19 @@ def preview_invoices(
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Create QuickBooks invoices from LMN exports"
-    )
-    parser.add_argument(
-        "--time-data",
-        required=True,
-        help="Path to LMN Job History Time Data CSV",
-    )
-    parser.add_argument(
-        "--service-data",
-        required=True,
-        help="Path to LMN Job History Service Data CSV",
-    )
-    parser.add_argument(
-        "--mapping",
-        help="Path to customer mapping CSV (uses default if not specified)",
-    )
-    parser.add_argument(
-        "--date",
-        help="Invoice date (YYYY-MM-DD format, defaults to today)",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Preview what would be created without actually creating invoices",
-    )
-    parser.add_argument(
-        "--preview",
-        action="store_true",
-        help="Show detailed invoice preview with line items",
-    )
+    # TODO: Production version will have drag-and-drop UI for adding files
+    time_data = "docs/sample_data/time_data_sample.csv"
+    service_data = "docs/sample_data/service_data_sample.csv"
 
-    args = parser.parse_args()
-
-    # Validate paths
-    if not Path(args.time_data).exists():
-        print(f"ERROR: Time data file not found: {args.time_data}")
+    if not Path(time_data).exists():
+        print(f"ERROR: Time data file not found: {time_data}")
         return 1
 
-    if not Path(args.service_data).exists():
-        print(f"ERROR: Service data file not found: {args.service_data}")
+    if not Path(service_data).exists():
+        print(f"ERROR: Service data file not found: {service_data}")
         return 1
 
-    if args.preview:
-        preview_invoices(args.time_data, args.service_data, args.date)
-    else:
-        process_lmn_exports(
-            args.time_data,
-            args.service_data,
-            args.mapping,
-            args.date,
-            args.dry_run,
-        )
+    process_lmn_exports(time_data, service_data)
 
     return 0
 

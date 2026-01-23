@@ -81,7 +81,8 @@ tests/
     # Mirror src/ structure
 docs/
     IMPLEMENTATION_PLAN.md
-    sample_data/    # Example LMN exports and QBO invoice PDFs
+    QB_OAuth.md         # QuickBooks OAuth requirements and implementation
+    sample_data/        # Example LMN exports and QBO invoice PDFs
 Imports
 
 Group imports: standard library, third-party, local
@@ -110,7 +111,7 @@ Test edge cases: overnight shifts, missing drive time, zero-dollar items
 Use sample data from docs/sample_data/
 
 Common Commands
-bash# Run tests
+# Run tests
 pytest
 
 # Run linter
@@ -119,11 +120,22 @@ ruff check .
 # Format code
 ruff format .
 
-# Run the transformation (example)
-python -m src.main --input data/lmn_export.csv --output staging/invoices.xlsx
+# Preview invoices (no QBO connection)
+python -m src.main --preview --time-data data/time.csv --service-data data/service.csv
+
+# Create draft invoices in QBO
+python -m src.main --time-data data/time.csv --service-data data/service.csv
 Environment Setup
 Create a .env file (never commit this):
 QBO_CLIENT_ID=your_client_id
 QBO_CLIENT_SECRET=your_client_secret
-QBO_REDIRECT_URI=your_redirect_uri
-QBO_COMPANY_ID=your_realm_id
+QBO_REDIRECT_URI=https://lmn-to-qb-invoice.onrender.com/qbo/callback
+
+QuickBooks OAuth
+See docs/QB_OAuth.md for full OAuth implementation requirements and details.
+
+OAuth CLI commands:
+python -m src.qbo.auth setup    # Interactive authorization
+python -m src.qbo.auth export   # Export tokens for Render
+python -m src.qbo.auth refresh  # Manually refresh access token
+python -m src.qbo.auth clear    # Clear stored tokens
