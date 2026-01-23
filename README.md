@@ -218,6 +218,20 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed design documentation.
 
 ## Troubleshooting
 
+### "Invalid grant" error during customer mapping / QuickBooks search
+
+When searching for QuickBooks customers during mapping (web UI or CLI), you may see:
+```
+ERROR: Invalid grant error during refresh: {"error":"invalid_grant","error_description":"Incorrect or invalid refresh token"}
+```
+
+This means your OAuth tokens have expired or been revoked. Re-authorize:
+```bash
+python -m src.qbo.auth setup
+```
+
+Note: `--preview` mode still triggers QBO searches during interactive mapping. Workaround: skip mapping with 's' or pre-populate `config/customer_mapping.csv` manually.
+
 ### "No stored tokens found"
 
 Run OAuth setup: `python -m src.qbo.auth setup`

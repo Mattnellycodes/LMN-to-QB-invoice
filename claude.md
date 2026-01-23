@@ -144,3 +144,8 @@ python -m src.qbo.auth setup    # Interactive authorization
 python -m src.qbo.auth export   # Export tokens for Render
 python -m src.qbo.auth refresh  # Manually refresh access token
 python -m src.qbo.auth clear    # Clear stored tokens
+
+Known Issues
+- --preview mode triggers QBO API calls during interactive customer mapping
+  - Should skip QBO searches when in preview mode
+  - Workaround: skip mapping with 's' or pre-populate config/customer_mapping.csv
