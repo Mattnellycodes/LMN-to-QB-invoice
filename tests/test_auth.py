@@ -1,6 +1,5 @@
-"""Tests for QuickBooks Online OAuth authentication."""
+"""Tests for QuickBooks Online OAuth authentication (session-based)."""
 
-import json
 import os
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
@@ -12,30 +11,16 @@ from src.qbo.auth import (
     RefreshTokenExpired,
     InvalidGrant,
     CSRFError,
-    save_tokens,
-    load_tokens,
-    clear_tokens,
+    NotAuthenticated,
     get_auth_client,
     get_authorization_url,
     exchange_code_for_tokens,
     refresh_access_token,
-    get_valid_access_token,
-    export_tokens_for_render,
+    get_valid_tokens,
+    get_access_token_and_realm,
+    is_token_valid,
+    get_token_status,
 )
-
-
-# =============================================================================
-# Auto-mock database functions (simulate no database configured)
-# =============================================================================
-
-
-@pytest.fixture(autouse=True)
-def mock_database_functions():
-    """Mock database functions to simulate no database configured."""
-    with patch("src.qbo.auth.load_tokens_from_db", return_value=None):
-        with patch("src.qbo.auth.save_tokens_to_db", return_value=False):
-            with patch("src.qbo.auth.clear_tokens_from_db", return_value=False):
-                yield
 
 
 # =============================================================================
@@ -44,8 +29,8 @@ def mock_database_functions():
 
 
 @pytest.fixture
-def sample_tokens():
-    """Sample token data for testing."""
+def valid_tokens():
+    """Valid token data for testing."""
     return {
         "access_token": "test_access_token_123",
         "refresh_token": "test_refresh_token_456",
@@ -125,131 +110,19 @@ class TestExceptionClasses:
         """CSRFError inherits from QBOAuthError."""
         assert issubclass(CSRFError, QBOAuthError)
 
+    def test_not_authenticated_inherits_from_qboauth_error(self):
+        """NotAuthenticated inherits from QBOAuthError."""
+        assert issubclass(NotAuthenticated, QBOAuthError)
+
     def test_exceptions_accept_message(self):
         """All custom exceptions accept a message parameter."""
         msg = "Test error message"
 
-        err1 = QBOAuthError(msg)
-        assert str(err1) == msg
-
-        err2 = RefreshTokenExpired(msg)
-        assert str(err2) == msg
-
-        err3 = InvalidGrant(msg)
-        assert str(err3) == msg
-
-        err4 = CSRFError(msg)
-        assert str(err4) == msg
-
-
-# =============================================================================
-# Test Token Storage Functions
-# =============================================================================
-
-
-class TestTokenStorage:
-    """Test save_tokens, load_tokens, clear_tokens functions."""
-
-    def test_save_tokens_creates_parent_directory(self, sample_tokens, tmp_path):
-        """save_tokens creates parent directory if it doesn't exist."""
-        token_path = tmp_path / "new_dir" / "tokens.json"
-
-        with patch("src.qbo.auth.TOKEN_FILE", token_path):
-            save_tokens(sample_tokens)
-
-        assert token_path.parent.exists()
-        assert token_path.exists()
-
-    def test_save_tokens_writes_json(self, sample_tokens, tmp_path):
-        """save_tokens writes tokens as JSON."""
-        token_path = tmp_path / "tokens.json"
-
-        with patch("src.qbo.auth.TOKEN_FILE", token_path):
-            save_tokens(sample_tokens)
-
-        with open(token_path) as f:
-            saved = json.load(f)
-
-        assert saved["access_token"] == sample_tokens["access_token"]
-        assert saved["refresh_token"] == sample_tokens["refresh_token"]
-        assert saved["realm_id"] == sample_tokens["realm_id"]
-
-    def test_load_tokens_from_file(self, sample_tokens, tmp_path):
-        """load_tokens reads from file when env vars not set."""
-        token_path = tmp_path / "tokens.json"
-        token_path.parent.mkdir(parents=True, exist_ok=True)
-
-        with open(token_path, "w") as f:
-            json.dump(sample_tokens, f)
-
-        with patch("src.qbo.auth.TOKEN_FILE", token_path):
-            with patch.dict(os.environ, {}, clear=True):
-                # Ensure QBO_ACCESS_TOKEN is not set
-                os.environ.pop("QBO_ACCESS_TOKEN", None)
-                loaded = load_tokens()
-
-        assert loaded["access_token"] == sample_tokens["access_token"]
-        assert loaded["refresh_token"] == sample_tokens["refresh_token"]
-
-    def test_load_tokens_prefers_env_vars(self, tmp_path):
-        """load_tokens prefers environment variables over file (production mode)."""
-        token_path = tmp_path / "tokens.json"
-        token_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Write different tokens to file
-        file_tokens = {"access_token": "file_token", "refresh_token": "file_refresh"}
-        with open(token_path, "w") as f:
-            json.dump(file_tokens, f)
-
-        env_vars = {
-            "QBO_ACCESS_TOKEN": "env_access_token",
-            "QBO_REFRESH_TOKEN": "env_refresh_token",
-            "QBO_REALM_ID": "env_realm_id",
-            "QBO_TOKEN_EXPIRES_AT": "2026-01-20T12:00:00",
-            "QBO_REFRESH_EXPIRES_AT": "2026-04-20T12:00:00",
-        }
-
-        with patch("src.qbo.auth.TOKEN_FILE", token_path):
-            with patch.dict(os.environ, env_vars, clear=False):
-                loaded = load_tokens()
-
-        assert loaded["access_token"] == "env_access_token"
-        assert loaded["refresh_token"] == "env_refresh_token"
-        assert loaded["realm_id"] == "env_realm_id"
-
-    def test_load_tokens_returns_none_when_no_file_no_env(self, tmp_path):
-        """load_tokens returns None when no file and no env vars."""
-        token_path = tmp_path / "nonexistent" / "tokens.json"
-
-        with patch("src.qbo.auth.TOKEN_FILE", token_path):
-            with patch.dict(os.environ, {}, clear=True):
-                os.environ.pop("QBO_ACCESS_TOKEN", None)
-                loaded = load_tokens()
-
-        assert loaded is None
-
-    def test_clear_tokens_deletes_file(self, sample_tokens, tmp_path):
-        """clear_tokens deletes the token file."""
-        token_path = tmp_path / "tokens.json"
-        token_path.parent.mkdir(parents=True, exist_ok=True)
-
-        with open(token_path, "w") as f:
-            json.dump(sample_tokens, f)
-
-        assert token_path.exists()
-
-        with patch("src.qbo.auth.TOKEN_FILE", token_path):
-            clear_tokens()
-
-        assert not token_path.exists()
-
-    def test_clear_tokens_handles_missing_file(self, tmp_path):
-        """clear_tokens handles missing file gracefully."""
-        token_path = tmp_path / "nonexistent_tokens.json"
-
-        with patch("src.qbo.auth.TOKEN_FILE", token_path):
-            # Should not raise an exception
-            clear_tokens()
+        assert str(QBOAuthError(msg)) == msg
+        assert str(RefreshTokenExpired(msg)) == msg
+        assert str(InvalidGrant(msg)) == msg
+        assert str(CSRFError(msg)) == msg
+        assert str(NotAuthenticated(msg)) == msg
 
 
 # =============================================================================
@@ -260,12 +133,12 @@ class TestTokenStorage:
 class TestGetAuthClient:
     """Test get_auth_client function."""
 
-    def test_get_auth_client_creates_auth_client(self):
+    def test_creates_auth_client_with_env_credentials(self):
         """get_auth_client creates AuthClient with env credentials."""
         env_vars = {
             "QBO_CLIENT_ID": "test_client_id",
             "QBO_CLIENT_SECRET": "test_client_secret",
-            "QBO_REDIRECT_URI": "http://localhost:8000/qbo/callback",
+            "QBO_REDIRECT_URI": "http://localhost:8000/callback",
         }
 
         with patch.dict(os.environ, env_vars, clear=False):
@@ -275,9 +148,33 @@ class TestGetAuthClient:
                 MockAuthClient.assert_called_once_with(
                     client_id="test_client_id",
                     client_secret="test_client_secret",
-                    redirect_uri="http://localhost:8000/qbo/callback",
+                    redirect_uri="http://localhost:8000/callback",
                     environment="production",
                 )
+
+    def test_raises_error_when_client_id_missing(self):
+        """Raises QBOAuthError when QBO_CLIENT_ID missing."""
+        env_vars = {
+            "QBO_CLIENT_SECRET": "secret",
+            "QBO_REDIRECT_URI": "http://localhost/qbo/callback",
+        }
+
+        with patch.dict(os.environ, env_vars, clear=True):
+            with pytest.raises(QBOAuthError) as exc_info:
+                get_auth_client()
+
+        assert "QBO_CLIENT_ID" in str(exc_info.value)
+
+    def test_raises_error_when_multiple_vars_missing(self):
+        """Raises QBOAuthError listing all missing variables."""
+        with patch.dict(os.environ, {}, clear=True):
+            with pytest.raises(QBOAuthError) as exc_info:
+                get_auth_client()
+
+        error_msg = str(exc_info.value)
+        assert "QBO_CLIENT_ID" in error_msg
+        assert "QBO_CLIENT_SECRET" in error_msg
+        assert "QBO_REDIRECT_URI" in error_msg
 
 
 # =============================================================================
@@ -288,7 +185,7 @@ class TestGetAuthClient:
 class TestGetAuthorizationUrl:
     """Test get_authorization_url function."""
 
-    def test_get_authorization_url_returns_url(self):
+    def test_returns_url_from_auth_client(self):
         """get_authorization_url returns URL from AuthClient."""
         mock_client = MagicMock()
         mock_client.get_authorization_url.return_value = "https://appcenter.intuit.com/connect/oauth2?..."
@@ -299,7 +196,7 @@ class TestGetAuthorizationUrl:
         assert url == "https://appcenter.intuit.com/connect/oauth2?..."
         mock_client.get_authorization_url.assert_called_once()
 
-    def test_get_authorization_url_passes_state(self):
+    def test_passes_state_for_csrf_protection(self):
         """get_authorization_url passes state token for CSRF protection."""
         mock_client = MagicMock()
         mock_client.get_authorization_url.return_value = "https://example.com"
@@ -319,13 +216,10 @@ class TestGetAuthorizationUrl:
 class TestExchangeCodeForTokens:
     """Test exchange_code_for_tokens function."""
 
-    def test_exchange_code_saves_and_returns_tokens(self, tmp_path, mock_auth_client):
-        """exchange_code_for_tokens saves and returns tokens on success."""
-        token_path = tmp_path / "tokens.json"
-
+    def test_returns_tokens_on_success(self, mock_auth_client):
+        """exchange_code_for_tokens returns tokens dict on success."""
         with patch("src.qbo.auth.get_auth_client", return_value=mock_auth_client):
-            with patch("src.qbo.auth.TOKEN_FILE", token_path):
-                tokens = exchange_code_for_tokens("auth_code_123", "realm_456")
+            tokens = exchange_code_for_tokens("auth_code_123", "realm_456")
 
         assert tokens["access_token"] == "new_access_token"
         assert tokens["refresh_token"] == "new_refresh_token"
@@ -333,15 +227,10 @@ class TestExchangeCodeForTokens:
         assert "expires_at" in tokens
         assert "refresh_expires_at" in tokens
 
-        # Verify file was saved
-        assert token_path.exists()
-
-    def test_exchange_code_raises_invalid_grant_on_reused_code(self, mock_auth_client):
+    def test_raises_invalid_grant_on_reused_code(self, mock_auth_client):
         """exchange_code_for_tokens raises InvalidGrant when auth code reused."""
         from intuitlib.exceptions import AuthClientError
 
-        # Create a mock response object that AuthClientError expects
-        # AuthClientError uses response.content in __str__, so set that
         mock_response = MagicMock()
         mock_response.status_code = 400
         mock_response.content = b"invalid_grant: code has already been used"
@@ -354,17 +243,15 @@ class TestExchangeCodeForTokens:
 
         assert "invalid" in str(exc_info.value).lower()
 
-    def test_exchange_code_logs_intuit_tid(self, tmp_path, mock_auth_client, caplog):
+    def test_logs_intuit_tid(self, mock_auth_client, caplog):
         """exchange_code_for_tokens logs intuit_tid when available."""
-        token_path = tmp_path / "tokens.json"
         mock_auth_client.intuit_tid = "tid_abc123"
 
         import logging
 
         with caplog.at_level(logging.INFO):
             with patch("src.qbo.auth.get_auth_client", return_value=mock_auth_client):
-                with patch("src.qbo.auth.TOKEN_FILE", token_path):
-                    exchange_code_for_tokens("code", "realm")
+                exchange_code_for_tokens("code", "realm")
 
         assert any("intuit_tid" in record.message for record in caplog.records)
 
@@ -377,65 +264,33 @@ class TestExchangeCodeForTokens:
 class TestRefreshAccessToken:
     """Test refresh_access_token function."""
 
-    def test_refresh_updates_stored_tokens(self, sample_tokens, tmp_path, mock_auth_client):
-        """refresh_access_token updates stored tokens on success."""
-        token_path = tmp_path / "tokens.json"
-        token_path.parent.mkdir(parents=True, exist_ok=True)
-
-        with open(token_path, "w") as f:
-            json.dump(sample_tokens, f)
-
+    def test_updates_tokens_on_success(self, valid_tokens, mock_auth_client):
+        """refresh_access_token returns updated tokens on success."""
         with patch("src.qbo.auth.get_auth_client", return_value=mock_auth_client):
-            with patch("src.qbo.auth.TOKEN_FILE", token_path):
-                with patch.dict(os.environ, {}, clear=True):
-                    os.environ.pop("QBO_ACCESS_TOKEN", None)
-                    tokens = refresh_access_token()
+            result = refresh_access_token(valid_tokens)
 
-        assert tokens["access_token"] == "new_access_token"
-        assert tokens["refresh_token"] == "new_refresh_token"
+        assert result["access_token"] == "new_access_token"
+        assert result["refresh_token"] == "new_refresh_token"
 
-    def test_refresh_raises_value_error_when_no_tokens(self, tmp_path):
-        """refresh_access_token raises ValueError when no tokens stored."""
-        token_path = tmp_path / "nonexistent_tokens.json"
+    def test_raises_not_authenticated_when_no_tokens(self):
+        """refresh_access_token raises NotAuthenticated when no tokens provided."""
+        with pytest.raises(NotAuthenticated):
+            refresh_access_token(None)
 
-        with patch("src.qbo.auth.TOKEN_FILE", token_path):
-            with patch.dict(os.environ, {}, clear=True):
-                os.environ.pop("QBO_ACCESS_TOKEN", None)
-                with pytest.raises(ValueError) as exc_info:
-                    refresh_access_token()
+        with pytest.raises(NotAuthenticated):
+            refresh_access_token({})
 
-        assert "no stored tokens" in str(exc_info.value).lower()
-
-    def test_refresh_raises_refresh_token_expired(self, expired_refresh_tokens, tmp_path):
+    def test_raises_refresh_token_expired(self, expired_refresh_tokens):
         """refresh_access_token raises RefreshTokenExpired when refresh token expired."""
-        token_path = tmp_path / "tokens.json"
-        token_path.parent.mkdir(parents=True, exist_ok=True)
-
-        with open(token_path, "w") as f:
-            json.dump(expired_refresh_tokens, f)
-
-        with patch("src.qbo.auth.TOKEN_FILE", token_path):
-            with patch.dict(os.environ, {}, clear=True):
-                os.environ.pop("QBO_ACCESS_TOKEN", None)
-                with pytest.raises(RefreshTokenExpired) as exc_info:
-                    refresh_access_token()
+        with pytest.raises(RefreshTokenExpired) as exc_info:
+            refresh_access_token(expired_refresh_tokens)
 
         assert "expired" in str(exc_info.value).lower()
-        # Tokens should be cleared
-        assert not token_path.exists()
 
-    def test_refresh_raises_invalid_grant_when_revoked(self, sample_tokens, tmp_path, mock_auth_client):
+    def test_raises_invalid_grant_when_revoked(self, valid_tokens, mock_auth_client):
         """refresh_access_token raises InvalidGrant when token revoked."""
         from intuitlib.exceptions import AuthClientError
 
-        token_path = tmp_path / "tokens.json"
-        token_path.parent.mkdir(parents=True, exist_ok=True)
-
-        with open(token_path, "w") as f:
-            json.dump(sample_tokens, f)
-
-        # Create a mock response object that AuthClientError expects
-        # AuthClientError uses response.content in __str__, so set that
         mock_response = MagicMock()
         mock_response.status_code = 400
         mock_response.content = b"invalid_grant: token revoked"
@@ -443,153 +298,151 @@ class TestRefreshAccessToken:
         mock_auth_client.refresh.side_effect = AuthClientError(mock_response)
 
         with patch("src.qbo.auth.get_auth_client", return_value=mock_auth_client):
-            with patch("src.qbo.auth.TOKEN_FILE", token_path):
-                with patch.dict(os.environ, {}, clear=True):
-                    os.environ.pop("QBO_ACCESS_TOKEN", None)
-                    with pytest.raises(InvalidGrant):
-                        refresh_access_token()
-
-        # Tokens should be cleared on invalid grant
-        assert not token_path.exists()
+            with pytest.raises(InvalidGrant):
+                refresh_access_token(valid_tokens)
 
 
 # =============================================================================
-# Test Get Valid Access Token
+# Test Get Valid Tokens
 # =============================================================================
 
 
-class TestGetValidAccessToken:
-    """Test get_valid_access_token function."""
+class TestGetValidTokens:
+    """Test get_valid_tokens function."""
 
-    def test_returns_valid_token_without_refresh(self, sample_tokens, tmp_path):
-        """get_valid_access_token returns valid token without refresh."""
-        token_path = tmp_path / "tokens.json"
-        token_path.parent.mkdir(parents=True, exist_ok=True)
-
-        with open(token_path, "w") as f:
-            json.dump(sample_tokens, f)
-
-        with patch("src.qbo.auth.TOKEN_FILE", token_path):
-            with patch.dict(os.environ, {}, clear=True):
-                os.environ.pop("QBO_ACCESS_TOKEN", None)
-                with patch("src.qbo.auth.refresh_access_token") as mock_refresh:
-                    access_token, realm_id = get_valid_access_token()
+    def test_returns_valid_tokens_without_refresh(self, valid_tokens):
+        """get_valid_tokens returns valid tokens without refresh."""
+        with patch("src.qbo.auth.refresh_access_token") as mock_refresh:
+            result = get_valid_tokens(valid_tokens)
 
         mock_refresh.assert_not_called()
-        assert access_token == sample_tokens["access_token"]
-        assert realm_id == sample_tokens["realm_id"]
+        assert result == valid_tokens
 
-    def test_refreshes_expired_access_token(self, expired_access_tokens, tmp_path, mock_auth_client):
-        """get_valid_access_token refreshes expired access token."""
-        token_path = tmp_path / "tokens.json"
-        token_path.parent.mkdir(parents=True, exist_ok=True)
+    def test_refreshes_expired_access_token(self, expired_access_tokens):
+        """get_valid_tokens refreshes expired access token."""
+        refreshed = expired_access_tokens.copy()
+        refreshed["access_token"] = "refreshed_token"
 
-        with open(token_path, "w") as f:
-            json.dump(expired_access_tokens, f)
-
-        refreshed_tokens = {
-            "access_token": "refreshed_token",
-            "refresh_token": "new_refresh",
-            "realm_id": "123456789",
-            "expires_at": (datetime.now() + timedelta(hours=1)).isoformat(),
-            "refresh_expires_at": (datetime.now() + timedelta(days=100)).isoformat(),
-        }
-
-        with patch("src.qbo.auth.TOKEN_FILE", token_path):
-            with patch.dict(os.environ, {}, clear=True):
-                os.environ.pop("QBO_ACCESS_TOKEN", None)
-                with patch("src.qbo.auth.refresh_access_token", return_value=refreshed_tokens):
-                    access_token, realm_id = get_valid_access_token()
-
-        assert access_token == "refreshed_token"
-
-    def test_refreshes_within_5_minute_buffer(self, expiring_soon_tokens, tmp_path):
-        """get_valid_access_token refreshes within 5-minute buffer."""
-        token_path = tmp_path / "tokens.json"
-        token_path.parent.mkdir(parents=True, exist_ok=True)
-
-        with open(token_path, "w") as f:
-            json.dump(expiring_soon_tokens, f)
-
-        refreshed_tokens = {
-            "access_token": "refreshed_early",
-            "refresh_token": "new_refresh",
-            "realm_id": "123456789",
-            "expires_at": (datetime.now() + timedelta(hours=1)).isoformat(),
-            "refresh_expires_at": (datetime.now() + timedelta(days=100)).isoformat(),
-        }
-
-        with patch("src.qbo.auth.TOKEN_FILE", token_path):
-            with patch.dict(os.environ, {}, clear=True):
-                os.environ.pop("QBO_ACCESS_TOKEN", None)
-                with patch("src.qbo.auth.refresh_access_token", return_value=refreshed_tokens) as mock_refresh:
-                    access_token, _ = get_valid_access_token()
+        with patch("src.qbo.auth.refresh_access_token", return_value=refreshed) as mock_refresh:
+            result = get_valid_tokens(expired_access_tokens)
 
         mock_refresh.assert_called_once()
-        assert access_token == "refreshed_early"
+        assert result["access_token"] == "refreshed_token"
 
-    def test_raises_value_error_when_no_tokens(self, tmp_path):
-        """get_valid_access_token raises ValueError when no tokens."""
-        token_path = tmp_path / "nonexistent.json"
+    def test_refreshes_within_5_minute_buffer(self, expiring_soon_tokens):
+        """get_valid_tokens refreshes within 5-minute buffer."""
+        refreshed = expiring_soon_tokens.copy()
+        refreshed["access_token"] = "refreshed_early"
 
-        with patch("src.qbo.auth.TOKEN_FILE", token_path):
-            with patch.dict(os.environ, {}, clear=True):
-                os.environ.pop("QBO_ACCESS_TOKEN", None)
-                with pytest.raises(ValueError) as exc_info:
-                    get_valid_access_token()
+        with patch("src.qbo.auth.refresh_access_token", return_value=refreshed) as mock_refresh:
+            result = get_valid_tokens(expiring_soon_tokens)
 
-        assert "no stored tokens" in str(exc_info.value).lower()
+        mock_refresh.assert_called_once()
+        assert result["access_token"] == "refreshed_early"
 
-    def test_raises_refresh_token_expired(self, expired_refresh_tokens, tmp_path):
-        """get_valid_access_token raises RefreshTokenExpired when refresh token expired."""
-        token_path = tmp_path / "tokens.json"
-        token_path.parent.mkdir(parents=True, exist_ok=True)
+    def test_raises_not_authenticated_when_no_tokens(self):
+        """get_valid_tokens raises NotAuthenticated when no tokens."""
+        with pytest.raises(NotAuthenticated):
+            get_valid_tokens(None)
 
-        with open(token_path, "w") as f:
-            json.dump(expired_refresh_tokens, f)
+        with pytest.raises(NotAuthenticated):
+            get_valid_tokens({})
 
-        with patch("src.qbo.auth.TOKEN_FILE", token_path):
-            with patch.dict(os.environ, {}, clear=True):
-                os.environ.pop("QBO_ACCESS_TOKEN", None)
-                with pytest.raises(RefreshTokenExpired):
-                    get_valid_access_token()
+        with pytest.raises(NotAuthenticated):
+            get_valid_tokens({"refresh_token": "only_refresh"})
 
 
 # =============================================================================
-# Test Export Tokens For Render
+# Test Get Access Token And Realm
 # =============================================================================
 
 
-class TestExportTokensForRender:
-    """Test export_tokens_for_render function."""
+class TestGetAccessTokenAndRealm:
+    """Test get_access_token_and_realm function."""
 
-    def test_export_prints_env_var_format(self, sample_tokens, tmp_path, capsys):
-        """export_tokens_for_render prints env var format."""
-        token_path = tmp_path / "tokens.json"
-        token_path.parent.mkdir(parents=True, exist_ok=True)
+    def test_returns_tuple(self, valid_tokens):
+        """get_access_token_and_realm returns (access_token, realm_id)."""
+        with patch("src.qbo.auth.get_valid_tokens", return_value=valid_tokens):
+            access_token, realm_id = get_access_token_and_realm(valid_tokens)
 
-        with open(token_path, "w") as f:
-            json.dump(sample_tokens, f)
+        assert access_token == valid_tokens["access_token"]
+        assert realm_id == valid_tokens["realm_id"]
 
-        with patch("src.qbo.auth.TOKEN_FILE", token_path):
-            with patch.dict(os.environ, {}, clear=True):
-                os.environ.pop("QBO_ACCESS_TOKEN", None)
-                export_tokens_for_render()
 
-        captured = capsys.readouterr()
-        assert f"QBO_ACCESS_TOKEN={sample_tokens['access_token']}" in captured.out
-        assert f"QBO_REFRESH_TOKEN={sample_tokens['refresh_token']}" in captured.out
-        assert f"QBO_REALM_ID={sample_tokens['realm_id']}" in captured.out
-        assert "RENDER" in captured.out
+# =============================================================================
+# Test Is Token Valid
+# =============================================================================
 
-    def test_export_handles_missing_tokens(self, tmp_path, capsys):
-        """export_tokens_for_render handles missing tokens gracefully."""
-        token_path = tmp_path / "nonexistent.json"
 
-        with patch("src.qbo.auth.TOKEN_FILE", token_path):
-            with patch.dict(os.environ, {}, clear=True):
-                os.environ.pop("QBO_ACCESS_TOKEN", None)
-                export_tokens_for_render()
+class TestIsTokenValid:
+    """Test is_token_valid function."""
 
-        captured = capsys.readouterr()
-        assert "No tokens found" in captured.out
+    def test_returns_true_for_valid_tokens(self, valid_tokens):
+        """is_token_valid returns True for non-expired tokens."""
+        assert is_token_valid(valid_tokens) is True
+
+    def test_returns_false_for_expired_tokens(self, expired_access_tokens):
+        """is_token_valid returns False for expired tokens."""
+        assert is_token_valid(expired_access_tokens) is False
+
+    def test_returns_false_for_none(self):
+        """is_token_valid returns False for None."""
+        assert is_token_valid(None) is False
+
+    def test_returns_false_for_empty_dict(self):
+        """is_token_valid returns False for empty dict."""
+        assert is_token_valid({}) is False
+
+    def test_returns_false_for_missing_access_token(self):
+        """is_token_valid returns False when access_token missing."""
+        tokens = {"refresh_token": "refresh", "realm_id": "123"}
+        assert is_token_valid(tokens) is False
+
+    def test_returns_false_for_invalid_expires_at(self):
+        """is_token_valid returns False for invalid expires_at format."""
+        tokens = {
+            "access_token": "token",
+            "expires_at": "not-a-date",
+        }
+        assert is_token_valid(tokens) is False
+
+
+# =============================================================================
+# Test Get Token Status
+# =============================================================================
+
+
+class TestGetTokenStatus:
+    """Test get_token_status function."""
+
+    def test_returns_not_connected_for_none(self):
+        """get_token_status returns not connected for None."""
+        status = get_token_status(None)
+        assert status["connected"] is False
+        assert "Not connected" in status["message"]
+
+    def test_returns_connected_with_details(self, valid_tokens):
+        """get_token_status returns connected with token details."""
+        status = get_token_status(valid_tokens)
+        assert status["connected"] is True
+        assert status["realm_id"] == "123456789"
+        assert status["access_token_valid"] is True
+        assert status["refresh_token_valid"] is True
+
+    def test_shows_expired_access_token(self, expired_access_tokens):
+        """get_token_status shows expired access token."""
+        status = get_token_status(expired_access_tokens)
+        assert status["connected"] is True
+        assert status["access_token_valid"] is False
+        assert status["refresh_token_valid"] is True
+
+    def test_handles_parse_error_gracefully(self):
+        """get_token_status handles parse errors gracefully."""
+        tokens = {
+            "access_token": "token",
+            "realm_id": "123",
+            "expires_at": "invalid-date",
+        }
+        status = get_token_status(tokens)
+        assert status["connected"] is True
+        assert "error" in status

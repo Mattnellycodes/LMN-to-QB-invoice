@@ -23,13 +23,15 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+import logging
+logger = logging.getLogger(__name__)
+
 app = Flask(__name__)
 
 # Flask secret key - required for session security
 _secret_key = os.getenv("FLASK_SECRET_KEY")
 if not _secret_key:
-    import logging
-    logging.warning(
+    logger.warning(
         "FLASK_SECRET_KEY not set - using random key. "
         "Sessions will be lost on restart. Set FLASK_SECRET_KEY in production."
     )
@@ -61,9 +63,9 @@ def load_qbo_credentials():
         except (InvalidGrant, RefreshTokenExpired):
             # Token invalid/expired - clear and require re-auth
             session.pop("qbo_tokens", None)
-        except Exception:
-            # Other errors - don't block, just don't set credentials
-            pass
+        except Exception as e:
+            # Log the error so we can debug - this was causing silent failures
+            logger.exception("Error loading QBO credentials from session")
 
 
 def require_qbo_auth(f):
@@ -72,6 +74,9 @@ def require_qbo_auth(f):
     def decorated_function(*args, **kwargs):
         from src.qbo.context import has_qbo_credentials
         if not has_qbo_credentials():
+            # Return JSON error for AJAX requests
+            if request.is_json or request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                return jsonify({"error": "Not connected to QuickBooks. Please reconnect."}), 401
             flash("Please connect to QuickBooks first.", "warning")
             return redirect(url_for("index"))
         return f(*args, **kwargs)
@@ -285,7 +290,10 @@ def mapping_search():
     """Search QBO customers by name (AJAX endpoint)."""
     from src.qbo.customers import search_customers_by_name
 
-    query = request.json.get("query", "")
+    json_data = request.json
+    if not json_data:
+        return jsonify({"error": "Request must be JSON"}), 400
+    query = json_data.get("query", "")
     if len(query) < 2:
         return jsonify({"customers": []})
 
@@ -298,6 +306,7 @@ def mapping_search():
             ]
         })
     except Exception as e:
+        logger.exception("Error searching QBO customers")
         return jsonify({"error": str(e)}), 500
 
 
@@ -336,6 +345,7 @@ def mapping_save():
 
         return jsonify({"success": True})
     except Exception as e:
+        logger.exception("Error saving customer mapping")
         return jsonify({"error": str(e)}), 500
 
 
