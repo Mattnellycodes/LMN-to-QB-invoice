@@ -6,7 +6,7 @@ from typing import Dict, List, Optional
 
 import requests
 
-from src.qbo.auth import get_valid_access_token
+from src.qbo.context import get_qbo_credentials
 
 QBO_API_BASE = "https://quickbooks.api.intuit.com/v3/company"
 
@@ -17,7 +17,7 @@ def get_all_customers() -> List[Dict]:
 
     Returns list of customer objects with Id, DisplayName, etc.
     """
-    access_token, realm_id = get_valid_access_token()
+    access_token, realm_id = get_qbo_credentials()
 
     customers = []
     start_position = 1
@@ -47,7 +47,6 @@ def get_all_customers() -> List[Dict]:
         customers.extend(batch)
         start_position += len(batch)
 
-        # Check if we got fewer than max, meaning we're done
         if len(batch) < max_results:
             break
 
@@ -56,7 +55,7 @@ def get_all_customers() -> List[Dict]:
 
 def get_customer_by_id(customer_id: str) -> Optional[Dict]:
     """Fetch a single customer by QBO ID."""
-    access_token, realm_id = get_valid_access_token()
+    access_token, realm_id = get_qbo_credentials()
 
     url = f"{QBO_API_BASE}/{realm_id}/customer/{customer_id}"
 
@@ -77,9 +76,8 @@ def get_customer_by_id(customer_id: str) -> Optional[Dict]:
 
 def search_customers_by_name(name: str) -> List[Dict]:
     """Search for customers by display name (partial match)."""
-    access_token, realm_id = get_valid_access_token()
+    access_token, realm_id = get_qbo_credentials()
 
-    # Escape single quotes in name
     safe_name = name.replace("'", "\\'")
     query = f"SELECT * FROM Customer WHERE DisplayName LIKE '%{safe_name}%'"
 

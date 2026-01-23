@@ -232,6 +232,13 @@ python -m src.qbo.auth setup
 
 Note: `--preview` mode still triggers QBO searches during interactive mapping. Workaround: skip mapping with 's' or pre-populate `config/customer_mapping.csv` manually.
 
+### Disconnect from QuickBooks doesn't clear tokens
+
+**TODO:** The disconnect functionality in the web UI does not properly wipe the stored tokens. Manual workaround:
+```bash
+python -m src.qbo.auth clear
+```
+
 ### "No stored tokens found"
 
 Run OAuth setup: `python -m src.qbo.auth setup`

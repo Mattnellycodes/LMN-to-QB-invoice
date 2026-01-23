@@ -6,10 +6,12 @@ import io
 import os
 import secrets
 from datetime import datetime
+from functools import wraps
 
 from flask import (
     Flask,
     flash,
+    g,
     jsonify,
     redirect,
     render_template,
@@ -34,10 +36,46 @@ if not _secret_key:
     _secret_key = secrets.token_hex(32)
 app.secret_key = _secret_key
 
-# Initialize database on startup (if DATABASE_URL is set)
-if os.getenv("DATABASE_URL"):
-    from src.qbo.database import init_db
-    init_db()
+
+# =============================================================================
+# Request Hooks - Load QBO credentials into request context
+# =============================================================================
+
+
+@app.before_request
+def load_qbo_credentials():
+    """Load QBO tokens from session into request context (g object)."""
+    from src.qbo.context import set_qbo_credentials
+    from src.qbo.auth import get_valid_tokens, InvalidGrant, RefreshTokenExpired
+
+    tokens = session.get("qbo_tokens")
+    if tokens:
+        try:
+            # Validate and refresh if needed
+            valid_tokens = get_valid_tokens(tokens)
+            # Update session if tokens were refreshed
+            if valid_tokens != tokens:
+                session["qbo_tokens"] = valid_tokens
+            # Set in request context
+            set_qbo_credentials(valid_tokens["access_token"], valid_tokens["realm_id"])
+        except (InvalidGrant, RefreshTokenExpired):
+            # Token invalid/expired - clear and require re-auth
+            session.pop("qbo_tokens", None)
+        except Exception:
+            # Other errors - don't block, just don't set credentials
+            pass
+
+
+def require_qbo_auth(f):
+    """Decorator to require QBO authentication for a route."""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        from src.qbo.context import has_qbo_credentials
+        if not has_qbo_credentials():
+            flash("Please connect to QuickBooks first.", "warning")
+            return redirect(url_for("index"))
+        return f(*args, **kwargs)
+    return decorated_function
 
 
 # =============================================================================
@@ -59,18 +97,10 @@ def health():
 @app.route("/")
 def index():
     """Landing page with QuickBooks connection status."""
-    # Check if we have valid tokens
-    is_connected = False
-    realm_id = None
+    from src.qbo.context import has_qbo_credentials
 
-    try:
-        from src.qbo.auth import load_tokens
-        tokens = load_tokens()
-        if tokens and tokens.get("access_token") and tokens.get("realm_id"):
-            is_connected = True
-            realm_id = tokens.get("realm_id")
-    except Exception:
-        pass
+    is_connected = has_qbo_credentials()
+    realm_id = session.get("qbo_tokens", {}).get("realm_id") if is_connected else None
 
     return render_template(
         "index.html",
@@ -100,7 +130,8 @@ def qbo_authorize():
 @app.route("/qbo/callback")
 def qbo_callback():
     """Handle OAuth callback from QuickBooks."""
-    from src.qbo.auth import exchange_code_for_tokens, CSRFError, InvalidGrant
+    from src.qbo.auth import exchange_code_for_tokens, InvalidGrant
+    from src.qbo.context import set_qbo_credentials
 
     # Check for errors from QuickBooks
     error = request.args.get("error")
@@ -126,12 +157,14 @@ def qbo_callback():
 
     try:
         tokens = exchange_code_for_tokens(auth_code, realm_id)
-        flash(f"Successfully connected to QuickBooks! Company ID: {realm_id}", "success")
 
-        # Store token info for display
-        session["qbo_connected"] = True
-        session["qbo_realm_id"] = realm_id
-        session["qbo_expires_at"] = tokens.get("expires_at", "")
+        # Store tokens in session (not database)
+        session["qbo_tokens"] = tokens
+
+        # Set in request context for immediate use
+        set_qbo_credentials(tokens["access_token"], tokens["realm_id"])
+
+        flash(f"Successfully connected to QuickBooks! Company ID: {realm_id}", "success")
 
         return render_template(
             "oauth_success.html",
@@ -151,12 +184,7 @@ def qbo_callback():
 @app.route("/qbo/disconnect")
 def qbo_disconnect():
     """Clear stored tokens and disconnect from QuickBooks."""
-    from src.qbo.auth import clear_tokens
-
-    clear_tokens()
-    session.pop("qbo_connected", None)
-    session.pop("qbo_realm_id", None)
-    session.pop("qbo_expires_at", None)
+    session.pop("qbo_tokens", None)
     flash("Disconnected from QuickBooks.", "info")
     return redirect(url_for("index"))
 
@@ -164,51 +192,15 @@ def qbo_disconnect():
 @app.route("/auth/status")
 def auth_status():
     """Check current authentication status (JSON endpoint)."""
-    from src.qbo.auth import load_tokens
-    from src.qbo.database import is_database_configured
+    from src.qbo.auth import get_token_status
+    from src.qbo.context import has_qbo_credentials
 
-    tokens = load_tokens()
+    tokens = session.get("qbo_tokens")
+    status = get_token_status(tokens)
+    status["session_based"] = True
+    status["has_request_credentials"] = has_qbo_credentials()
 
-    if not tokens:
-        return jsonify({
-            "connected": False,
-            "message": "No QuickBooks connection",
-            "database_configured": is_database_configured(),
-        })
-
-    # Parse expiration times
-    try:
-        expires_at_str = tokens.get("expires_at", "")
-        refresh_expires_at_str = tokens.get("refresh_expires_at", "")
-
-        now = datetime.utcnow()
-        access_valid = False
-        refresh_valid = False
-
-        if expires_at_str:
-            expires_at = datetime.fromisoformat(expires_at_str)
-            access_valid = now < expires_at
-
-        if refresh_expires_at_str:
-            refresh_expires_at = datetime.fromisoformat(refresh_expires_at_str)
-            refresh_valid = now < refresh_expires_at
-
-        return jsonify({
-            "connected": True,
-            "realm_id": tokens.get("realm_id"),
-            "access_token_valid": access_valid,
-            "access_token_expires": expires_at_str,
-            "refresh_token_valid": refresh_valid,
-            "refresh_token_expires": refresh_expires_at_str,
-            "database_configured": is_database_configured(),
-        })
-    except Exception as e:
-        return jsonify({
-            "connected": True,
-            "realm_id": tokens.get("realm_id"),
-            "error": f"Could not parse token expiry: {e}",
-            "database_configured": is_database_configured(),
-        })
+    return jsonify(status)
 
 
 # =============================================================================
@@ -217,25 +209,14 @@ def auth_status():
 
 
 @app.route("/upload")
+@require_qbo_auth
 def upload():
     """Page with drag-and-drop UI for uploading CSVs."""
-    # Check if connected to QuickBooks
-    is_connected = False
-    try:
-        from src.qbo.auth import load_tokens
-        tokens = load_tokens()
-        is_connected = bool(tokens and tokens.get("access_token"))
-    except Exception:
-        pass
-
-    if not is_connected:
-        flash("Please connect to QuickBooks first.", "warning")
-        return redirect(url_for("index"))
-
     return render_template("upload.html")
 
 
 @app.route("/upload", methods=["POST"])
+@require_qbo_auth
 def upload_post():
     """Process uploaded CSV files."""
     from src.web_processing import process_csv_files, ProcessingError
@@ -283,6 +264,7 @@ def upload_post():
 
 
 @app.route("/mapping")
+@require_qbo_auth
 def mapping():
     """Show unmapped jobsites and allow mapping to QBO customers."""
     result = session.get("processing_result")
@@ -298,6 +280,7 @@ def mapping():
 
 
 @app.route("/mapping/search", methods=["POST"])
+@require_qbo_auth
 def mapping_search():
     """Search QBO customers by name (AJAX endpoint)."""
     from src.qbo.customers import search_customers_by_name
@@ -311,7 +294,7 @@ def mapping_search():
         return jsonify({
             "customers": [
                 {"id": c.get("Id"), "name": c.get("DisplayName")}
-                for c in customers[:10]  # Limit to 10 results
+                for c in customers[:10]
             ]
         })
     except Exception as e:
@@ -319,6 +302,7 @@ def mapping_search():
 
 
 @app.route("/mapping/save", methods=["POST"])
+@require_qbo_auth
 def mapping_save():
     """Save a single customer mapping."""
     from src.mapping.customer_mapping import (
@@ -356,6 +340,7 @@ def mapping_save():
 
 
 @app.route("/mapping/skip", methods=["POST"])
+@require_qbo_auth
 def mapping_skip():
     """Skip remaining unmapped jobsites and proceed to results."""
     result = session.get("processing_result", {})
@@ -371,6 +356,7 @@ def mapping_skip():
 
 
 @app.route("/results")
+@require_qbo_auth
 def results():
     """Show processing results and invoice preview."""
     result = session.get("processing_result")
@@ -382,6 +368,7 @@ def results():
 
 
 @app.route("/create-invoices", methods=["POST"])
+@require_qbo_auth
 def create_invoices():
     """Create draft invoices in QuickBooks."""
     from src.web_processing import create_qbo_invoices
@@ -401,6 +388,7 @@ def create_invoices():
 
 
 @app.route("/invoice-results")
+@require_qbo_auth
 def invoice_results():
     """Show results of invoice creation."""
     results = session.get("invoice_results")
@@ -417,7 +405,6 @@ def invoice_results():
 
 
 if __name__ == "__main__":
-    # For local development only - never runs in production (gunicorn used instead)
     port = int(os.getenv("PORT", 5000))
     debug = os.getenv("FLASK_DEBUG", "false").lower() == "true"
     app.run(host="0.0.0.0", port=port, debug=debug)

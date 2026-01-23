@@ -9,7 +9,7 @@ from typing import Dict, List, Optional
 import requests
 
 from src.invoice.line_items import InvoiceData, LineItem
-from src.qbo.auth import get_valid_access_token
+from src.qbo.context import get_qbo_credentials
 
 QBO_API_BASE = "https://quickbooks.api.intuit.com/v3/company"
 
@@ -45,7 +45,7 @@ def create_draft_invoice(
     Returns:
         InvoiceResult with success status and invoice details
     """
-    access_token, realm_id = get_valid_access_token()
+    access_token, realm_id = get_qbo_credentials()
 
     # Calculate due date based on terms
     invoice_date = datetime.strptime(invoice_data.invoice_date, "%Y-%m-%d")
@@ -65,9 +65,6 @@ def create_draft_invoice(
         "Line": qbo_lines,
         "PrivateNote": f"Created from LMN export. JobsiteID: {invoice_data.jobsite_id}",
     }
-
-    # Add sales term if we can look it up (optional)
-    # For now, just set the due date directly
 
     url = f"{QBO_API_BASE}/{realm_id}/invoice"
 
@@ -139,7 +136,6 @@ def build_qbo_line_item(item: LineItem, line_num: int, item_ref: Optional[Dict])
         },
     }
 
-    # Add item reference if provided (links to QBO product/service)
     if item_ref:
         line["SalesItemLineDetail"]["ItemRef"] = item_ref
 
@@ -156,7 +152,7 @@ def calculate_due_date(invoice_date: datetime, terms: str) -> datetime:
         "Due on receipt": 0,
     }
 
-    days = terms_days.get(terms, 15)  # Default to Net 15
+    days = terms_days.get(terms, 15)
     return invoice_date + timedelta(days=days)
 
 
@@ -166,7 +162,7 @@ def get_item_by_name(item_name: str) -> Optional[Dict]:
 
     Returns the item with Id for use as ItemRef.
     """
-    access_token, realm_id = get_valid_access_token()
+    access_token, realm_id = get_qbo_credentials()
 
     safe_name = item_name.replace("'", "\\'")
     query = f"SELECT * FROM Item WHERE Name = '{safe_name}'"

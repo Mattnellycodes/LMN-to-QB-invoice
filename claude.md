@@ -149,3 +149,5 @@ Known Issues
 - --preview mode triggers QBO API calls during interactive customer mapping
   - Should skip QBO searches when in preview mode
   - Workaround: skip mapping with 's' or pre-populate config/customer_mapping.csv
+- Disconnect from QuickBooks (web UI) does not clear stored tokens
+  - Workaround: run `python -m src.qbo.auth clear`
