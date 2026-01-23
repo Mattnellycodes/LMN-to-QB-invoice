@@ -519,7 +519,7 @@ class TestGetAuthClientValidation:
 
         env_vars = {
             "QBO_CLIENT_SECRET": "secret",
-            "QBO_REDIRECT_URI": "http://localhost/callback",
+            "QBO_REDIRECT_URI": "http://localhost/qbo/callback",
         }
 
         with patch.dict(os.environ, env_vars, clear=True):

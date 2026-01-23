@@ -265,7 +265,7 @@ class TestGetAuthClient:
         env_vars = {
             "QBO_CLIENT_ID": "test_client_id",
             "QBO_CLIENT_SECRET": "test_client_secret",
-            "QBO_REDIRECT_URI": "http://localhost:8000/callback",
+            "QBO_REDIRECT_URI": "http://localhost:8000/qbo/callback",
         }
 
         with patch.dict(os.environ, env_vars, clear=False):
@@ -275,7 +275,7 @@ class TestGetAuthClient:
                 MockAuthClient.assert_called_once_with(
                     client_id="test_client_id",
                     client_secret="test_client_secret",
-                    redirect_uri="http://localhost:8000/callback",
+                    redirect_uri="http://localhost:8000/qbo/callback",
                     environment="production",
                 )
 
