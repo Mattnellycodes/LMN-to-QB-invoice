@@ -1,0 +1,286 @@
+{% extends "base.html" %}
+
+{% block title %}Map Customers{% endblock %}
+
+{% block head %}
+<style>
+    .mapping-card {
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        padding: 20px;
+        margin-bottom: 15px;
+        background: #fafafa;
+    }
+    .mapping-card.mapped {
+        background: #e8f8f0;
+        border-color: #27ae60;
+    }
+    .mapping-card h3 {
+        margin-top: 0;
+        margin-bottom: 5px;
+    }
+    .mapping-card .customer-name {
+        color: #666;
+        margin-bottom: 15px;
+    }
+    .search-input {
+        width: 100%;
+        padding: 10px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        font-size: 16px;
+    }
+    .search-results {
+        border: 1px solid #ddd;
+        border-top: none;
+        border-radius: 0 0 4px 4px;
+        max-height: 200px;
+        overflow-y: auto;
+        display: none;
+    }
+    .search-results.active {
+        display: block;
+    }
+    .search-result {
+        padding: 10px;
+        cursor: pointer;
+        border-bottom: 1px solid #eee;
+    }
+    .search-result:hover {
+        background: #f5f5f5;
+    }
+    .search-result:last-child {
+        border-bottom: none;
+    }
+    .mapped-customer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    }
+    .mapped-customer .name {
+        color: #27ae60;
+        font-weight: 500;
+    }
+    .progress-bar {
+        background: #e0e0e0;
+        border-radius: 10px;
+        height: 20px;
+        margin-bottom: 20px;
+        overflow: hidden;
+    }
+    .progress-bar-fill {
+        background: #27ae60;
+        height: 100%;
+        transition: width 0.3s;
+    }
+    .progress-text {
+        text-align: center;
+        margin-bottom: 10px;
+        color: #666;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<h1>Map Customers</h1>
+
+<p>These jobsites from LMN need to be matched to QuickBooks customers.</p>
+
+<div class="progress-text">
+    <span id="mapped-count">0</span> of <span id="total-count">{{ unmapped_jobsites|length }}</span> mapped
+</div>
+<div class="progress-bar">
+    <div class="progress-bar-fill" id="progress-fill" style="width: 0%"></div>
+</div>
+
+<div id="mappings-container">
+    {% for jobsite in unmapped_jobsites %}
+    <div class="mapping-card" id="card-{{ jobsite.jobsite_id }}" data-jobsite-id="{{ jobsite.jobsite_id }}">
+        <h3>{{ jobsite.jobsite_name }}</h3>
+        <div class="customer-name">{{ jobsite.customer_name }} (Jobsite ID: {{ jobsite.jobsite_id }})</div>
+
+        <div class="search-container">
+            <input type="text"
+                   class="search-input"
+                   placeholder="Search QuickBooks customers..."
+                   data-jobsite-id="{{ jobsite.jobsite_id }}"
+                   data-jobsite-name="{{ jobsite.jobsite_name }}">
+            <div class="search-results"></div>
+        </div>
+
+        <div class="mapped-customer" style="display: none;">
+            <span>Mapped to: <span class="name"></span></span>
+            <button class="btn btn-secondary" onclick="unmapCustomer('{{ jobsite.jobsite_id }}')">Change</button>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<div class="mt-20">
+    <button class="btn btn-success" id="continue-btn" disabled onclick="continueTooResults()">
+        Continue to Results
+    </button>
+    <button class="btn btn-secondary" style="margin-left: 10px;" onclick="skipRemaining()">
+        Skip Unmapped & Continue
+    </button>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    let mappedCount = 0;
+    const totalCount = {{ unmapped_jobsites|length }};
+    let searchTimeout = null;
+
+    function updateProgress() {
+        const percent = (mappedCount / totalCount) * 100;
+        document.getElementById('progress-fill').style.width = percent + '%';
+        document.getElementById('mapped-count').textContent = mappedCount;
+        document.getElementById('continue-btn').disabled = mappedCount < totalCount;
+    }
+
+    // Search input handlers
+    document.querySelectorAll('.search-input').forEach(input => {
+        const resultsDiv = input.nextElementSibling;
+
+        input.addEventListener('input', (e) => {
+            clearTimeout(searchTimeout);
+            const query = e.target.value.trim();
+
+            if (query.length < 2) {
+                resultsDiv.classList.remove('active');
+                return;
+            }
+
+            searchTimeout = setTimeout(() => {
+                searchCustomers(query, resultsDiv, input.dataset.jobsiteId);
+            }, 300);
+        });
+
+        input.addEventListener('focus', () => {
+            if (input.value.length >= 2) {
+                resultsDiv.classList.add('active');
+            }
+        });
+    });
+
+    // Close search results when clicking outside
+    document.addEventListener('click', (e) => {
+        if (!e.target.closest('.search-container')) {
+            document.querySelectorAll('.search-results').forEach(div => {
+                div.classList.remove('active');
+            });
+        }
+    });
+
+    async function searchCustomers(query, resultsDiv, jobsiteId) {
+        try {
+            const response = await fetch('/mapping/search', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({query: query})
+            });
+
+            if (!response.ok) {
+                throw new Error(`Search failed: ${response.status}`);
+            }
+
+            const data = await response.json();
+
+            resultsDiv.innerHTML = '';
+            if (data.customers && data.customers.length > 0) {
+                data.customers.forEach(customer => {
+                    const div = document.createElement('div');
+                    div.className = 'search-result';
+                    div.textContent = customer.name;
+                    div.onclick = () => selectCustomer(jobsiteId, customer.id, customer.name);
+                    resultsDiv.appendChild(div);
+                });
+                resultsDiv.classList.add('active');
+            } else {
+                resultsDiv.innerHTML = '<div class="search-result">No customers found</div>';
+                resultsDiv.classList.add('active');
+            }
+        } catch (err) {
+            console.error('Search error:', err);
+            resultsDiv.innerHTML = '<div class="search-result" style="color: #c0392b;">Search failed. Please try again.</div>';
+            resultsDiv.classList.add('active');
+        }
+    }
+
+    async function selectCustomer(jobsiteId, customerId, customerName) {
+        try {
+            const response = await fetch('/mapping/save', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    jobsite_id: jobsiteId,
+                    qbo_customer_id: customerId,
+                    qbo_display_name: customerName
+                })
+            });
+
+            if (!response.ok) {
+                throw new Error(`Save failed: ${response.status}`);
+            }
+
+            const data = await response.json();
+
+            if (data.success) {
+                const card = document.getElementById('card-' + jobsiteId);
+                card.classList.add('mapped');
+
+                // Hide search, show mapped
+                card.querySelector('.search-container').style.display = 'none';
+                const mappedDiv = card.querySelector('.mapped-customer');
+                mappedDiv.querySelector('.name').textContent = customerName;
+                mappedDiv.style.display = 'flex';
+
+                mappedCount++;
+                updateProgress();
+            } else {
+                alert('Error saving mapping: ' + (data.error || 'Unknown error'));
+            }
+        } catch (err) {
+            console.error('Save error:', err);
+            alert('Failed to save mapping. Please try again.');
+        }
+    }
+
+    function unmapCustomer(jobsiteId) {
+        const card = document.getElementById('card-' + jobsiteId);
+        card.classList.remove('mapped');
+        card.querySelector('.search-container').style.display = 'block';
+        card.querySelector('.mapped-customer').style.display = 'none';
+        card.querySelector('.search-input').value = '';
+
+        mappedCount--;
+        updateProgress();
+    }
+
+    function continueTooResults() {
+        window.location.href = '/results';
+    }
+
+    async function skipRemaining() {
+        try {
+            const response = await fetch('/mapping/skip', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'}
+            });
+
+            if (!response.ok) {
+                throw new Error(`Skip failed: ${response.status}`);
+            }
+
+            const data = await response.json();
+            if (data.redirect) {
+                window.location.href = data.redirect;
+            }
+        } catch (err) {
+            console.error('Skip error:', err);
+            alert('Failed to skip. Please try again.');
+        }
+    }
+</script>
+{% endblock %}

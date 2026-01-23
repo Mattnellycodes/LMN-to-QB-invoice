@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: lmn-to-qb-invoice
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.0"
+      - key: QBO_CLIENT_ID
+        sync: false
+      - key: QBO_CLIENT_SECRET
+        sync: false
+      - key: QBO_REDIRECT_URI
+        sync: false
+      - key: FLASK_SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: lmn-qb-db
+          property: connectionString
+
+databases:
+  - name: lmn-qb-db
+    plan: free

@@ -52,6 +52,114 @@ class CSRFError(QBOAuthError):
 TOKEN_FILE = Path(__file__).parent.parent.parent / "config" / ".qbo_tokens.json"
 
 
+# =============================================================================
+# Database Token Storage (for production/Render)
+# =============================================================================
+
+
+def load_tokens_from_db() -> Optional[Dict]:
+    """Load tokens from PostgreSQL database."""
+    from src.qbo.database import get_session, is_database_configured
+    from src.qbo.models import QBOToken
+
+    if not is_database_configured():
+        return None
+
+    with get_session() as session:
+        if not session:
+            return None
+
+        token = session.query(QBOToken).filter_by(id=1).first()
+        if not token:
+            return None
+
+        logger.debug("Loaded tokens from database")
+        return token.to_dict()
+
+
+def save_tokens_to_db(tokens: dict) -> bool:
+    """
+    Save tokens to PostgreSQL database.
+
+    Returns:
+        True if saved successfully, False otherwise.
+    """
+    from src.qbo.database import get_session, is_database_configured
+    from src.qbo.models import QBOToken
+
+    if not is_database_configured():
+        return False
+
+    with get_session() as session:
+        if not session:
+            return False
+
+        try:
+            # Parse datetime strings if needed
+            expires_at = tokens["expires_at"]
+            refresh_expires_at = tokens["refresh_expires_at"]
+
+            if isinstance(expires_at, str):
+                expires_at = datetime.fromisoformat(expires_at)
+            if isinstance(refresh_expires_at, str):
+                refresh_expires_at = datetime.fromisoformat(refresh_expires_at)
+
+            # Upsert: update if exists, insert if not
+            existing = session.query(QBOToken).filter_by(id=1).first()
+            if existing:
+                existing.access_token = tokens["access_token"]
+                existing.refresh_token = tokens["refresh_token"]
+                existing.realm_id = tokens["realm_id"]
+                existing.expires_at = expires_at
+                existing.refresh_expires_at = refresh_expires_at
+            else:
+                new_token = QBOToken(
+                    id=1,
+                    access_token=tokens["access_token"],
+                    refresh_token=tokens["refresh_token"],
+                    realm_id=tokens["realm_id"],
+                    expires_at=expires_at,
+                    refresh_expires_at=refresh_expires_at,
+                )
+                session.add(new_token)
+
+            session.commit()
+            logger.info("Tokens saved to database")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save tokens to database: {e}")
+            session.rollback()
+            return False
+
+
+def clear_tokens_from_db() -> bool:
+    """
+    Clear tokens from PostgreSQL database.
+
+    Returns:
+        True if cleared successfully, False otherwise.
+    """
+    from src.qbo.database import get_session, is_database_configured
+    from src.qbo.models import QBOToken
+
+    if not is_database_configured():
+        return False
+
+    with get_session() as session:
+        if not session:
+            return False
+
+        try:
+            session.query(QBOToken).filter_by(id=1).delete()
+            session.commit()
+            logger.info("Tokens cleared from database")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to clear tokens from database: {e}")
+            session.rollback()
+            return False
+
+
 def get_auth_client() -> AuthClient:
     """Create an AuthClient instance with credentials from environment."""
     client_id = os.getenv("QBO_CLIENT_ID")
@@ -208,7 +316,18 @@ def get_valid_access_token() -> Tuple[str, str]:
 
 
 def save_tokens(tokens: dict) -> None:
-    """Save tokens to local JSON file with restricted permissions."""
+    """
+    Save tokens to database (if configured) or local JSON file.
+
+    Priority:
+    1. PostgreSQL database (if DATABASE_URL is set)
+    2. Local JSON file (for development)
+    """
+    # Try database first
+    if save_tokens_to_db(tokens):
+        return
+
+    # Fall back to file storage
     TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(TOKEN_FILE, "w") as f:
         json.dump(tokens, f, indent=2)
@@ -218,16 +337,17 @@ def save_tokens(tokens: dict) -> None:
 
 def load_tokens() -> Optional[Dict]:
     """
-    Load tokens from environment variables (production) or file (local).
-
-    For production (Render), set these environment variables:
-    - QBO_ACCESS_TOKEN
-    - QBO_REFRESH_TOKEN
-    - QBO_REALM_ID
-    - QBO_TOKEN_EXPIRES_AT
-    - QBO_REFRESH_EXPIRES_AT
+    Load tokens with priority:
+    1. PostgreSQL database (if DATABASE_URL is set)
+    2. Environment variables (legacy support)
+    3. Local JSON file (for development)
     """
-    # Check environment variables first (for Render/production)
+    # Try database first (preferred for production)
+    db_tokens = load_tokens_from_db()
+    if db_tokens:
+        return db_tokens
+
+    # Check environment variables (legacy/fallback)
     access_token = os.getenv("QBO_ACCESS_TOKEN")
     if access_token:
         refresh_token = os.getenv("QBO_REFRESH_TOKEN")
@@ -261,7 +381,11 @@ def load_tokens() -> Optional[Dict]:
 
 
 def clear_tokens() -> None:
-    """Remove stored tokens (used when tokens are invalid)."""
+    """Remove stored tokens from database and/or file."""
+    # Clear from database
+    clear_tokens_from_db()
+
+    # Clear from file
     if TOKEN_FILE.exists():
         TOKEN_FILE.unlink()
         logger.info(f"Cleared tokens from {TOKEN_FILE}")
@@ -346,78 +470,76 @@ def setup_oauth_interactive() -> None:
     # Generate CSRF state token
     state = secrets.token_urlsafe(32)
 
-    if use_local_server:
-        # Extract port from redirect URI
-        parsed = urlparse(redirect_uri)
-        port = parsed.port or 8000
-
-        print(f"Starting local callback server on port {port}...")
-        server = HTTPServer(("localhost", port), OAuthCallbackHandler)
-        server.auth_code = None
-        server.realm_id = None
-        server.callback_state = None
-        server.error = None
-
-        # Generate auth URL with state
-        auth_url = get_authorization_url(state)
-
-        print()
-        print("Opening browser for authorization...")
-        print("(If browser doesn't open, visit this URL manually:)")
-        print()
-        print(auth_url)
-        print()
-
-        webbrowser.open(auth_url)
-
-        print("Waiting for authorization callback...")
-        server.handle_request()
-
-        if server.error:
-            print(f"\nERROR: Authorization failed: {server.error}")
-            return
-
-        if not server.auth_code or not server.realm_id:
-            print("\nERROR: Did not receive authorization code or realm ID.")
-            return
-
-        # Validate CSRF state
-        if server.callback_state != state:
-            print("\nERROR: State mismatch - possible CSRF attack. Aborting.")
-            logger.error(
-                f"CSRF state mismatch: expected={state}, received={server.callback_state}"
-            )
-            return
-
-        auth_code = server.auth_code
-        realm_id = server.realm_id
-
-    else:
-        # Manual flow for non-localhost redirect URIs
-        auth_url = get_authorization_url(state)
-
-        print("Step 1: Visit this URL in your browser to authorize:")
-        print()
-        print(auth_url)
-        print()
-        print("Step 2: After authorizing, you'll be redirected to your redirect URI.")
-        print("Copy the 'code', 'realmId', and 'state' parameters from the URL.")
-        print()
-
-        auth_code = input("Enter the authorization code: ").strip()
-        realm_id = input("Enter the realm ID (company ID): ").strip()
-        callback_state = input("Enter the state parameter: ").strip()
-
-        if not auth_code or not realm_id:
-            print("ERROR: Both code and realm ID are required.")
-            return
-
-        # Validate CSRF state
-        if callback_state != state:
-            print("\nERROR: State mismatch - possible CSRF attack. Aborting.")
-            return
-
     try:
+        if use_local_server:
+            # Extract port from redirect URI
+            parsed = urlparse(redirect_uri)
+            port = parsed.port or 8000
+
+            print(f"Starting local callback server on port {port}...")
+            server = HTTPServer(("localhost", port), OAuthCallbackHandler)
+            server.auth_code = None
+            server.realm_id = None
+            server.callback_state = None
+            server.error = None
+
+            # Generate auth URL with state
+            auth_url = get_authorization_url(state)
+
+            print()
+            print("Opening browser for authorization...")
+            print("(If browser doesn't open, visit this URL manually:)")
+            print()
+            print(auth_url)
+            print()
+
+            webbrowser.open(auth_url)
+
+            print("Waiting for authorization callback...")
+            server.handle_request()
+
+            if server.error:
+                print(f"\nERROR: Authorization failed: {server.error}")
+                return
+
+            if not server.auth_code or not server.realm_id:
+                print("\nERROR: Did not receive authorization code or realm ID.")
+                return
+
+            # Validate CSRF state
+            if server.callback_state != state:
+                logger.error(
+                    f"CSRF state mismatch: expected={state}, received={server.callback_state}"
+                )
+                raise CSRFError("State mismatch - possible CSRF attack. Aborting.")
+
+            auth_code = server.auth_code
+            realm_id = server.realm_id
+
+        else:
+            # Manual flow for non-localhost redirect URIs
+            auth_url = get_authorization_url(state)
+
+            print("Step 1: Visit this URL in your browser to authorize:")
+            print()
+            print(auth_url)
+            print()
+            print("Step 2: After authorizing, you'll be redirected to your redirect URI.")
+            print("Copy the 'code', 'realmId', and 'state' parameters from the URL.")
+            print()
+
+            auth_code = input("Enter the authorization code: ").strip()
+            realm_id = input("Enter the realm ID (company ID): ").strip()
+            callback_state = input("Enter the state parameter: ").strip()
+
+            if not auth_code or not realm_id:
+                print("ERROR: Both code and realm ID are required.")
+                return
+
+            # Validate CSRF state
+            if callback_state != state:
+                raise CSRFError("State mismatch - possible CSRF attack. Aborting.")
+
         tokens = exchange_code_for_tokens(auth_code, realm_id)
         print()
         print("SUCCESS! Tokens saved to:", TOKEN_FILE)
@@ -430,6 +552,8 @@ def setup_oauth_interactive() -> None:
         if export == "y":
             export_tokens_for_render()
 
+    except CSRFError as e:
+        print(f"\nERROR: {e}")
     except InvalidGrant as e:
         print(f"\nERROR: {e}")
     except Exception as e:

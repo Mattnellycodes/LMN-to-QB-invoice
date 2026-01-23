@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+
+{% block title %}Invoice Results{% endblock %}
+
+{% block content %}
+<h1>Invoice Creation Results</h1>
+
+{% set successful = results|selectattr('success')|list %}
+{% set failed = results|rejectattr('success')|list %}
+
+<h2>Summary</h2>
+<table>
+    <tr>
+        <th>Successfully Created</th>
+        <td class="text-right">{{ successful|length }}</td>
+    </tr>
+    <tr>
+        <th>Failed</th>
+        <td class="text-right">{{ failed|length }}</td>
+    </tr>
+    <tr>
+        <th>Total Amount Created</th>
+        <td class="text-right">${{ "%.2f"|format(successful|sum(attribute='total')) }}</td>
+    </tr>
+</table>
+
+{% if successful %}
+<h2 class="mt-20">Created Invoices</h2>
+<table>
+    <thead>
+        <tr>
+            <th>Invoice #</th>
+            <th>Customer</th>
+            <th class="text-right">Total</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for inv in successful %}
+        <tr>
+            <td>{{ inv.invoice_number or inv.invoice_id }}</td>
+            <td>{{ inv.customer_name }}</td>
+            <td class="text-right">${{ "%.2f"|format(inv.total) }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endif %}
+
+{% if failed %}
+<h2 class="mt-20">Failed Invoices</h2>
+<table>
+    <thead>
+        <tr>
+            <th>Customer</th>
+            <th>Jobsite ID</th>
+            <th>Error</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for inv in failed %}
+        <tr>
+            <td>{{ inv.customer_name }}</td>
+            <td>{{ inv.jobsite_id }}</td>
+            <td class="text-muted">{{ inv.error }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endif %}
+
+<div class="mt-20">
+    <a href="{{ url_for('upload') }}" class="btn">Process More Invoices</a>
+    <a href="{{ url_for('index') }}" class="btn btn-secondary" style="margin-left: 10px;">Back to Home</a>
+</div>
+
+<p class="text-muted mt-20">
+    Invoices are created as drafts in QuickBooks. Review them in QuickBooks before sending to customers.
+</p>
+{% endblock %}

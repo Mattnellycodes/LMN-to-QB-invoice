@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+
+{% block title %}Upload CSV Files{% endblock %}
+
+{% block head %}
+<style>
+    .upload-zone {
+        border: 2px dashed #ccc;
+        border-radius: 8px;
+        padding: 40px;
+        text-align: center;
+        margin-bottom: 20px;
+        transition: all 0.2s;
+        background: #fafafa;
+    }
+    .upload-zone:hover, .upload-zone.dragover {
+        border-color: #3498db;
+        background: #ecf6fd;
+    }
+    .upload-zone.has-file {
+        border-color: #27ae60;
+        background: #e8f8f0;
+    }
+    .upload-zone input[type="file"] {
+        display: none;
+    }
+    .upload-zone label {
+        cursor: pointer;
+        display: block;
+    }
+    .upload-zone h3 {
+        margin-top: 0;
+        color: #666;
+    }
+    .upload-zone p {
+        margin-bottom: 0;
+        color: #888;
+    }
+    .file-name {
+        margin-top: 10px;
+        font-weight: 500;
+        color: #27ae60;
+    }
+    .upload-icon {
+        font-size: 48px;
+        color: #ccc;
+        margin-bottom: 10px;
+    }
+    .upload-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 20px;
+    }
+    @media (max-width: 600px) {
+        .upload-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<h1>Upload CSV Files</h1>
+
+<p>Upload your LMN Job History exports. You need both files to create invoices.</p>
+
+<form id="upload-form" action="{{ url_for('upload_post') }}" method="post" enctype="multipart/form-data">
+    <div class="upload-grid">
+        <div class="upload-zone" id="time-zone">
+            <label for="time_data">
+                <div class="upload-icon">&#128196;</div>
+                <h3>Time Data CSV</h3>
+                <p>Job History - Time Data export</p>
+                <input type="file" id="time_data" name="time_data" accept=".csv" required>
+                <div class="file-name" id="time-file-name"></div>
+            </label>
+        </div>
+
+        <div class="upload-zone" id="service-zone">
+            <label for="service_data">
+                <div class="upload-icon">&#128196;</div>
+                <h3>Service Data CSV</h3>
+                <p>Job History - Service Data export</p>
+                <input type="file" id="service_data" name="service_data" accept=".csv" required>
+                <div class="file-name" id="service-file-name"></div>
+            </label>
+        </div>
+    </div>
+
+    <div class="mt-20">
+        <button type="submit" class="btn btn-success" id="submit-btn" disabled>Process Files</button>
+    </div>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const timeInput = document.getElementById('time_data');
+    const serviceInput = document.getElementById('service_data');
+    const timeZone = document.getElementById('time-zone');
+    const serviceZone = document.getElementById('service-zone');
+    const submitBtn = document.getElementById('submit-btn');
+
+    function updateSubmitButton() {
+        submitBtn.disabled = !(timeInput.files.length && serviceInput.files.length);
+    }
+
+    function setupDropZone(zone, input, fileNameEl) {
+        // Drag and drop handlers
+        zone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            zone.classList.add('dragover');
+        });
+
+        zone.addEventListener('dragleave', () => {
+            zone.classList.remove('dragover');
+        });
+
+        zone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            zone.classList.remove('dragover');
+
+            const files = e.dataTransfer.files;
+            if (files.length && files[0].name.endsWith('.csv')) {
+                input.files = files;
+                updateFileDisplay(zone, fileNameEl, files[0].name);
+                updateSubmitButton();
+            }
+        });
+
+        // File input change handler
+        input.addEventListener('change', () => {
+            if (input.files.length) {
+                updateFileDisplay(zone, fileNameEl, input.files[0].name);
+                updateSubmitButton();
+            }
+        });
+    }
+
+    function updateFileDisplay(zone, fileNameEl, name) {
+        zone.classList.add('has-file');
+        document.getElementById(fileNameEl).textContent = name;
+    }
+
+    setupDropZone(timeZone, timeInput, 'time-file-name');
+    setupDropZone(serviceZone, serviceInput, 'service-file-name');
+</script>
+{% endblock %}

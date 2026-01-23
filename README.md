@@ -80,20 +80,25 @@ python -m src.qbo.auth clear
 
 #### Deploying to Render
 
-After running `setup` locally, export tokens for Render:
+Tokens are automatically stored in PostgreSQL on Render:
 
-```bash
-python -m src.qbo.auth export
-```
+1. **Link a PostgreSQL database** to your Render service
+2. **Set these environment variables** in Render dashboard:
+   - `QBO_CLIENT_ID`
+   - `QBO_CLIENT_SECRET`
+   - `QBO_REDIRECT_URI`
+   - `DATABASE_URL` (auto-set when you link a PostgreSQL database)
 
-Copy the output environment variables to your Render service:
-- `QBO_ACCESS_TOKEN`
-- `QBO_REFRESH_TOKEN`
-- `QBO_REALM_ID`
-- `QBO_TOKEN_EXPIRES_AT`
-- `QBO_REFRESH_EXPIRES_AT`
+3. **Authorize once locally**, then run the app on Render:
+   ```bash
+   python -m src.qbo.auth setup
+   ```
+   This saves tokens to your local `config/.qbo_tokens.json`. When you deploy to Render, move the tokens to the Render database:
+   ```bash
+   python -m src.qbo.auth export
+   ```
 
-See [docs/QB_OAuth.md](docs/QB_OAuth.md) for full OAuth implementation details.
+Tokens are now stored securely in the PostgreSQL database instead of environment variables. See [docs/QB_OAuth.md](docs/QB_OAuth.md) for full details.
 
 ### 4. Set Up Customer Mapping
 

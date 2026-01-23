@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+
+{% block title %}Invoice Preview{% endblock %}
+
+{% block content %}
+<h1>Invoice Preview</h1>
+
+{% if result.skipped_jobsites %}
+<div class="flash warning">
+    <strong>{{ result.skipped_jobsites|length }} jobsite(s) skipped</strong> - no QBO customer mapping
+</div>
+{% endif %}
+
+<h2>Summary</h2>
+<table>
+    <tr>
+        <th>Total Invoices</th>
+        <td>{{ result.invoices|length }}</td>
+    </tr>
+    <tr>
+        <th>Total Amount</th>
+        <td class="text-right">${{ "%.2f"|format(result.total_amount) }}</td>
+    </tr>
+</table>
+
+{% if result.invoices %}
+<h2 class="mt-20">Invoices to Create</h2>
+
+<table>
+    <thead>
+        <tr>
+            <th>Customer</th>
+            <th>Jobsite</th>
+            <th>Line Items</th>
+            <th class="text-right">Subtotal</th>
+            <th class="text-right">Fee</th>
+            <th class="text-right">Total</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for invoice in result.invoices %}
+        <tr>
+            <td>{{ invoice.customer_name }}</td>
+            <td>{{ invoice.jobsite_name }}</td>
+            <td>{{ invoice.line_items|length }}</td>
+            <td class="text-right">${{ "%.2f"|format(invoice.subtotal) }}</td>
+            <td class="text-right">${{ "%.2f"|format(invoice.direct_payment_fee) }}</td>
+            <td class="text-right"><strong>${{ "%.2f"|format(invoice.total) }}</strong></td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<details class="mt-20">
+    <summary style="cursor: pointer; font-weight: 500;">View Line Item Details</summary>
+    {% for invoice in result.invoices %}
+    <div style="margin: 20px 0; padding: 15px; background: #f8f9fa; border-radius: 8px;">
+        <h4>{{ invoice.customer_name }} - {{ invoice.jobsite_name }}</h4>
+        <table>
+            <thead>
+                <tr>
+                    <th>Description</th>
+                    <th class="text-right">Qty</th>
+                    <th class="text-right">Rate</th>
+                    <th class="text-right">Amount</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in invoice.line_items %}
+                <tr>
+                    <td>{{ item.description }}</td>
+                    <td class="text-right">{{ "%.2f"|format(item.quantity) }}</td>
+                    <td class="text-right">${{ "%.2f"|format(item.rate) }}</td>
+                    <td class="text-right">${{ "%.2f"|format(item.amount) }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endfor %}
+</details>
+
+<form action="{{ url_for('create_invoices') }}" method="post" class="mt-20">
+    <button type="submit" class="btn btn-success">Create Draft Invoices in QuickBooks</button>
+    <a href="{{ url_for('upload') }}" class="btn btn-secondary" style="margin-left: 10px;">Start Over</a>
+</form>
+
+{% else %}
+<div class="flash warning">
+    No invoices to create. All jobsites may have been skipped or have no billable items.
+</div>
+<a href="{{ url_for('upload') }}" class="btn">Upload New Files</a>
+{% endif %}
+{% endblock %}

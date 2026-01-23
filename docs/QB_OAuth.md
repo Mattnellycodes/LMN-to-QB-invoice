@@ -89,16 +89,16 @@ Tokens are stored in `config/.qbo_tokens.json`:
 ```
 
 ### Production (Render)
-Set these environment variables in Render dashboard:
-```
-QBO_ACCESS_TOKEN=...
-QBO_REFRESH_TOKEN=...
-QBO_REALM_ID=...
-QBO_TOKEN_EXPIRES_AT=...
-QBO_REFRESH_EXPIRES_AT=...
-```
+Tokens are stored in **PostgreSQL database** automatically:
 
-Use `python -m src.qbo.auth export` to generate these values after local setup.
+1. **Link a PostgreSQL database** to your Render service
+2. Set `DATABASE_URL` environment variable (auto-set by Render when you link the database)
+3. Tokens are saved to the database the first time you run `python -m src.qbo.auth setup`
+
+The app uses this priority for token loading:
+1. PostgreSQL database (if `DATABASE_URL` is set)
+2. Environment variables (legacy support for older deployments)
+3. Local JSON file (development only)
 
 ## Implementation Details
 
@@ -108,4 +108,4 @@ The OAuth implementation is in `src/qbo/auth.py` and provides:
 - **CSRF protection**: State parameter validated on all callbacks
 - **intuit_tid capture**: Logged for troubleshooting support requests
 - **Custom exceptions**: `RefreshTokenExpired`, `InvalidGrant`, `CSRFError`
-- **Dual storage**: Environment variables (production) or JSON file (local dev)
+- **Flexible storage**: PostgreSQL (production), environment variables (legacy), or JSON file (local dev)

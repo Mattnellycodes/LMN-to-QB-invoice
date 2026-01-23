@@ -25,6 +25,20 @@ from src.qbo.auth import (
 
 
 # =============================================================================
+# Auto-mock database functions (simulate no database configured)
+# =============================================================================
+
+
+@pytest.fixture(autouse=True)
+def mock_database_functions():
+    """Mock database functions to simulate no database configured."""
+    with patch("src.qbo.auth.load_tokens_from_db", return_value=None):
+        with patch("src.qbo.auth.save_tokens_to_db", return_value=False):
+            with patch("src.qbo.auth.clear_tokens_from_db", return_value=False):
+                yield
+
+
+# =============================================================================
 # Test Fixtures
 # =============================================================================
 

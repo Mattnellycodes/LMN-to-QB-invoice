@@ -131,6 +131,11 @@ QBO_CLIENT_ID=your_client_id
 QBO_CLIENT_SECRET=your_client_secret
 QBO_REDIRECT_URI=https://lmn-to-qb-invoice.onrender.com/qbo/callback
 
+For production (Render):
+DATABASE_URL=postgresql://...  (auto-set when you link a PostgreSQL database)
+Tokens are stored in the database automatically after running `python -m src.qbo.auth setup`
+Legacy: Token env vars (QBO_ACCESS_TOKEN, QBO_REFRESH_TOKEN, etc.) still supported but deprecated
+
 QuickBooks OAuth
 See docs/QB_OAuth.md for full OAuth implementation requirements and details.
 

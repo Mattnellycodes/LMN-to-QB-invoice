@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+
+{% block title %}Authorization Successful{% endblock %}
+
+{% block content %}
+<h1>Authorization Successful!</h1>
+
+<div class="flash success">
+    Successfully connected to QuickBooks Online.
+</div>
+
+<h2>Connection Details</h2>
+<table>
+    <tr>
+        <th>Company ID (Realm ID)</th>
+        <td>{{ realm_id }}</td>
+    </tr>
+    <tr>
+        <th>Access Token Expires</th>
+        <td>{{ expires_at }}</td>
+    </tr>
+    <tr>
+        <th>Refresh Token Expires</th>
+        <td>{{ refresh_expires_at }}</td>
+    </tr>
+</table>
+
+<p class="text-muted">
+    The access token refreshes automatically. The refresh token is valid for approximately 100 days.
+</p>
+
+<div class="mt-20">
+    <a href="{{ url_for('upload') }}" class="btn btn-success">Upload CSV Files</a>
+    <a href="{{ url_for('index') }}" class="btn btn-secondary" style="margin-left: 10px;">Back to Home</a>
+</div>
+{% endblock %}
