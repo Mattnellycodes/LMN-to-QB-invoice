@@ -344,10 +344,11 @@ def mapping_save():
         unmapped = result.get("unmapped_jobsites", [])
         result["unmapped_jobsites"] = [j for j in unmapped if j["jobsite_id"] != jobsite_id]
 
-        # Add qbo_customer_id to the invoice for this jobsite
+        # Add qbo_customer_id and qbo_display_name to the invoice for this jobsite
         for inv in result.get("invoices", []):
             if inv["jobsite_id"] == jobsite_id:
                 inv["qbo_customer_id"] = qbo_customer_id
+                inv["qbo_display_name"] = qbo_display_name
                 break
 
         session["processing_result"] = result

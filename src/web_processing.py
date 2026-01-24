@@ -227,7 +227,7 @@ def create_qbo_invoices(invoices: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         results.append({
             "success": result.success,
             "jobsite_id": result.jobsite_id,
-            "customer_name": result.customer_name,
+            "customer_name": inv_dict.get("qbo_display_name") or result.customer_name,
             "invoice_id": result.invoice_id,
             "invoice_number": result.invoice_number,
             "total": result.total,

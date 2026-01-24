@@ -40,7 +40,7 @@
     <tbody>
         {% for invoice in result.invoices %}
         <tr>
-            <td>{{ invoice.customer_name }}</td>
+            <td>{{ invoice.qbo_display_name or invoice.customer_name }}</td>
             <td>{{ invoice.jobsite_name }}</td>
             <td>{{ invoice.line_items|length }}</td>
             <td class="text-right">${{ "%.2f"|format(invoice.subtotal) }}</td>
@@ -55,7 +55,7 @@
     <summary style="cursor: pointer; font-weight: 500;">View Line Item Details</summary>
     {% for invoice in result.invoices %}
     <div style="margin: 20px 0; padding: 15px; background: #f8f9fa; border-radius: 8px;">
-        <h4>{{ invoice.customer_name }} - {{ invoice.jobsite_name }}</h4>
+        <h4>{{ invoice.qbo_display_name or invoice.customer_name }} - {{ invoice.jobsite_name }}</h4>
         <table>
             <thead>
                 <tr>
