@@ -337,10 +337,19 @@ def mapping_save():
         )
         save_customer_mapping(mappings)
 
-        # Update session data to remove this jobsite from unmapped
+        # Update session data
         result = session.get("processing_result", {})
+
+        # Remove from unmapped list
         unmapped = result.get("unmapped_jobsites", [])
         result["unmapped_jobsites"] = [j for j in unmapped if j["jobsite_id"] != jobsite_id]
+
+        # Add qbo_customer_id to the invoice for this jobsite
+        for inv in result.get("invoices", []):
+            if inv["jobsite_id"] == jobsite_id:
+                inv["qbo_customer_id"] = qbo_customer_id
+                break
+
         session["processing_result"] = result
 
         return jsonify({"success": True})
@@ -374,7 +383,24 @@ def results():
         flash("No data to display. Please upload CSV files first.", "warning")
         return redirect(url_for("upload"))
 
-    return render_template("results.html", result=result)
+    # Filter to only mapped invoices (those with qbo_customer_id)
+    all_invoices = result.get("invoices", [])
+    mapped_invoices = [inv for inv in all_invoices if inv.get("qbo_customer_id")]
+
+    # Build display result with only mapped invoices
+    display_result = {
+        "invoices": mapped_invoices,
+        "skipped_jobsites": result.get("skipped_jobsites", []),
+        "total_amount": sum(inv["total"] for inv in mapped_invoices),
+        "summary": {
+            "total_jobsites": len(all_invoices),
+            "mapped_jobsites": len(mapped_invoices),
+            "unmapped_jobsites": len(result.get("unmapped_jobsites", [])),
+            "total_line_items": sum(len(inv["line_items"]) for inv in mapped_invoices),
+        },
+    }
+
+    return render_template("results.html", result=display_result)
 
 
 @app.route("/create-invoices", methods=["POST"])
@@ -388,8 +414,14 @@ def create_invoices():
         flash("No invoices to create.", "warning")
         return redirect(url_for("results"))
 
+    # Filter to only mapped invoices (those with qbo_customer_id)
+    mapped_invoices = [inv for inv in result["invoices"] if inv.get("qbo_customer_id")]
+    if not mapped_invoices:
+        flash("No mapped invoices to create.", "warning")
+        return redirect(url_for("results"))
+
     try:
-        invoice_results = create_qbo_invoices(result["invoices"])
+        invoice_results = create_qbo_invoices(mapped_invoices)
         session["invoice_results"] = invoice_results
         return redirect(url_for("invoice_results"))
     except Exception as e:

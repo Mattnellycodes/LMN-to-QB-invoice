@@ -87,26 +87,28 @@ def process_csv_files(
                 "customer_name": inv.customer_name,
             })
 
-    # Filter to only mapped invoices and convert to dicts
-    mapped_invoices = []
-    for inv in invoices:
-        qbo_customer_id = get_qbo_customer_id(inv.jobsite_id, mappings)
-        if qbo_customer_id:
-            inv_dict = invoice_to_dict(inv)
-            inv_dict["qbo_customer_id"] = qbo_customer_id
-            mapped_invoices.append(inv_dict)
+    # Convert ALL invoices to dicts (store all, filter at results time)
+    all_invoices = [invoice_to_dict(inv) for inv in invoices]
 
-    total_amount = sum(inv["total"] for inv in mapped_invoices)
+    # Calculate totals for currently mapped invoices
+    mapped_count = 0
+    total_amount = 0.0
+    for inv_dict in all_invoices:
+        qbo_customer_id = get_qbo_customer_id(inv_dict["jobsite_id"], mappings)
+        if qbo_customer_id:
+            inv_dict["qbo_customer_id"] = qbo_customer_id
+            mapped_count += 1
+            total_amount += inv_dict["total"]
 
     return {
-        "invoices": mapped_invoices,
+        "invoices": all_invoices,  # Store ALL invoices
         "unmapped_jobsites": unmapped_jobsites,
         "total_amount": total_amount,
         "summary": {
             "total_jobsites": len(invoices),
-            "mapped_jobsites": len(mapped_invoices),
+            "mapped_jobsites": mapped_count,
             "unmapped_jobsites": len(unmapped_jobsites),
-            "total_line_items": sum(len(inv["line_items"]) for inv in mapped_invoices),
+            "total_line_items": sum(len(inv["line_items"]) for inv in all_invoices),
         },
     }
 
