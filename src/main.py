@@ -75,6 +75,7 @@ def process_lmn_exports(
             unmapped_context=unmapped_context,
             existing_mappings=mappings,
             mapping_path=mapping_path,
+            preview_mode=dry_run,
         )
 
     # Build invoice data

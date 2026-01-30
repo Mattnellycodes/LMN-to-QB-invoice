@@ -135,6 +135,7 @@ def prompt_single_jobsite_mapping(
     unmapped: UnmappedJobsite,
     index: int,
     total: int,
+    preview_mode: bool = False,
 ) -> Optional[CustomerMapping]:
     """
     Interactive prompt for mapping a single unmapped jobsite.
@@ -143,10 +144,11 @@ def prompt_single_jobsite_mapping(
         unmapped: The unmapped jobsite context
         index: Current index (1-based) for display
         total: Total number of unmapped jobsites
+        preview_mode: If True, skip QBO API calls and auto-skip jobsites
 
     Returns:
         CustomerMapping if user completed mapping
-        None if user chose to skip
+        None if user chose to skip (or preview_mode is True)
     """
     print()
     print("-" * 50)
@@ -157,6 +159,11 @@ def prompt_single_jobsite_mapping(
     print(f"  LMN Customer Name: {unmapped.lmn_customer_name}")
     print(f"  Est. Invoice:      ${unmapped.estimated_amount:.2f}")
     print()
+
+    # In preview mode, skip QBO API calls entirely
+    if preview_mode:
+        print("  [Preview mode - skipping QBO search]")
+        return None
 
     while True:
         search_term = input("Enter QuickBooks customer name to search (or 's' to skip): ").strip()
@@ -198,6 +205,7 @@ def prompt_interactive_mapping(
     unmapped_context: List[UnmappedJobsite],
     existing_mappings: Dict[str, CustomerMapping],
     mapping_path: Optional[Union[str, Path]] = None,
+    preview_mode: bool = False,
 ) -> Dict[str, CustomerMapping]:
     """
     Main interactive loop for mapping unmapped jobsites.
@@ -209,6 +217,7 @@ def prompt_interactive_mapping(
         unmapped_context: List of unmapped jobsites with context
         existing_mappings: Current mappings dict (will be updated)
         mapping_path: Path to mapping CSV file
+        preview_mode: If True, skip QBO API calls and auto-skip unmapped jobsites
 
     Returns:
         Updated mappings dict with any new mappings added
@@ -230,7 +239,7 @@ def prompt_interactive_mapping(
     skipped = []
 
     for i, unmapped in enumerate(unmapped_context, 1):
-        result = prompt_single_jobsite_mapping(unmapped, i, len(unmapped_context))
+        result = prompt_single_jobsite_mapping(unmapped, i, len(unmapped_context), preview_mode)
 
         if result:
             # Add to mappings and save immediately
