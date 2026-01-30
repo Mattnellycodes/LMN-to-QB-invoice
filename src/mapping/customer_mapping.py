@@ -52,6 +52,49 @@ def load_customer_mapping(
     return mappings
 
 
+def load_mapping_from_lmn_api(
+    use_db_overrides: bool = True,
+    csv_override_path: Optional[Union[str, Path]] = None,
+) -> Dict[str, CustomerMapping]:
+    """
+    Load JobsiteID -> QBO CustomerID mapping from LMN API.
+
+    Overrides from database (production) or CSV (local dev) take precedence
+    over LMN API mappings.
+
+    Args:
+        use_db_overrides: If True, load overrides from PostgreSQL database.
+                          If False, use csv_override_path instead.
+        csv_override_path: Path to CSV with manual overrides (when use_db_overrides=False).
+
+    Returns:
+        {jobsite_id: CustomerMapping}
+    """
+    from src.lmn.api import load_mapping_from_lmn_api as fetch_lmn_mappings
+
+    # Start with LMN API mappings
+    mappings = fetch_lmn_mappings()
+
+    # Apply overrides (database for production, CSV for local dev)
+    if use_db_overrides:
+        try:
+            from src.db.customer_overrides import get_customer_overrides
+            db_overrides = get_customer_overrides()
+            if db_overrides:
+                mappings.update(db_overrides)
+        except Exception:
+            # Database not available - fall back to CSV
+            csv_overrides = load_customer_mapping(csv_override_path)
+            if csv_overrides:
+                mappings.update(csv_overrides)
+    else:
+        csv_overrides = load_customer_mapping(csv_override_path)
+        if csv_overrides:
+            mappings.update(csv_overrides)
+
+    return mappings
+
+
 def save_customer_mapping(
     mappings: Dict[str, CustomerMapping],
     mapping_path: Optional[Union[str, Path]] = None,

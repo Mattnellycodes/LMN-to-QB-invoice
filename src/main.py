@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+import argparse
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -11,6 +11,7 @@ from src.calculations.time_calc import calculate_billable_hours
 from src.invoice.line_items import build_all_invoices, InvoiceData
 from src.mapping.customer_mapping import (
     load_customer_mapping,
+    load_mapping_from_lmn_api,
     get_qbo_customer_id,
     find_unmapped_jobsites,
 )
@@ -18,7 +19,7 @@ from src.mapping.interactive_mapping import (
     build_unmapped_context,
     prompt_interactive_mapping,
 )
-from src.qbo.invoices import create_draft_invoice, InvoiceResult
+from src.qbo.invoices import create_draft_invoice
 
 
 def process_lmn_exports(
@@ -27,6 +28,7 @@ def process_lmn_exports(
     mapping_path: Optional[str] = None,
     invoice_date: Optional[str] = None,
     dry_run: bool = False,
+    use_csv_mapping: bool = False,
 ) -> Dict:
     """
     Main processing function: LMN CSVs -> QBO draft invoices.
@@ -34,9 +36,10 @@ def process_lmn_exports(
     Args:
         time_data_path: Path to LMN Job History Time Data CSV
         service_data_path: Path to LMN Job History Service Data CSV
-        mapping_path: Path to customer mapping CSV (optional, uses default)
+        mapping_path: Path to customer mapping CSV (when use_csv_mapping=True)
         invoice_date: Invoice date in YYYY-MM-DD format (optional, uses today)
         dry_run: If True, don't create invoices in QBO, just show what would be created
+        use_csv_mapping: If True, use CSV mapping; if False (default), use LMN API
 
     Returns:
         Summary dict with created, skipped, and errored invoices
@@ -62,8 +65,12 @@ def process_lmn_exports(
 
     # Load customer mapping
     print()
-    print("Loading customer mapping...")
-    mappings = load_customer_mapping(mapping_path)
+    if use_csv_mapping:
+        print("Loading customer mapping from CSV...")
+        mappings = load_customer_mapping(mapping_path)
+    else:
+        print("Loading customer mapping from LMN API (with DB overrides)...")
+        mappings = load_mapping_from_lmn_api(use_db_overrides=True, csv_override_path=mapping_path)
     print(f"  Loaded {len(mappings)} mappings")
 
     # Check for unmapped jobsites and prompt for mapping
@@ -166,19 +173,71 @@ def preview_invoices(
 
 
 def main():
-    # TODO: Production version will have drag-and-drop UI for adding files
-    time_data = "docs/sample_data/time_data_sample.csv"
-    service_data = "docs/sample_data/service_data_sample.csv"
+    # TODO: Add date overlap detection - warn when uploaded file dates overlap
+    # with dates from previous run to prevent duplicate invoice creation.
 
-    if not Path(time_data).exists():
-        print(f"ERROR: Time data file not found: {time_data}")
+    parser = argparse.ArgumentParser(
+        description="Create QuickBooks invoices from LMN timesheet exports"
+    )
+    parser.add_argument(
+        "--time-data",
+        required=True,
+        help="Path to LMN Job History Time Data CSV",
+    )
+    parser.add_argument(
+        "--service-data",
+        required=True,
+        help="Path to LMN Job History Service Data CSV",
+    )
+    parser.add_argument(
+        "--preview",
+        action="store_true",
+        help="Preview invoices without creating them in QBO",
+    )
+    parser.add_argument(
+        "--use-csv-mapping",
+        action="store_true",
+        help="Use CSV file for customer mapping instead of LMN API",
+    )
+    parser.add_argument(
+        "--mapping-path",
+        help="Path to customer mapping CSV (only used with --use-csv-mapping)",
+    )
+    parser.add_argument(
+        "--invoice-date",
+        help="Invoice date in YYYY-MM-DD format (default: today)",
+    )
+    parser.add_argument(
+        "--init-db",
+        action="store_true",
+        help="Initialize database tables and exit",
+    )
+
+    args = parser.parse_args()
+
+    # Handle database initialization
+    if args.init_db:
+        from src.db.connection import init_db
+        init_db()
+        return 0
+
+    # Validate input files
+    if not Path(args.time_data).exists():
+        print(f"ERROR: Time data file not found: {args.time_data}")
         return 1
 
-    if not Path(service_data).exists():
-        print(f"ERROR: Service data file not found: {service_data}")
+    if not Path(args.service_data).exists():
+        print(f"ERROR: Service data file not found: {args.service_data}")
         return 1
 
-    process_lmn_exports(time_data, service_data)
+    process_lmn_exports(
+        time_data_path=args.time_data,
+        service_data_path=args.service_data,
+        mapping_path=args.mapping_path,
+        invoice_date=args.invoice_date,
+        dry_run=args.preview,
+        use_csv_mapping=args.use_csv_mapping,
+    )
 
     return 0
 
