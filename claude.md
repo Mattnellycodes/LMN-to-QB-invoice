@@ -81,6 +81,7 @@ src/
     invoice/              # Invoice line item building, fee calculation
     qbo/                  # QuickBooks Online API integration
     mapping/              # Customer matching (JobsiteID → QBO CustomerID)
+    db/                   # Database operations (invoice history, customer overrides)
     web_processing.py     # High-level functions for web interface (file upload/detection)
     main.py               # CLI entry point
 app.py                    # Flask web application
@@ -91,7 +92,7 @@ templates/
     index.html            # Home/connection status
     upload.html           # File upload with drag-and-drop and live detection
     mapping.html          # Customer mapping UI
-    results.html          # Invoice preview
+    results.html          # Invoice preview with duplicate detection
     invoice_results.html  # Invoice creation results
 tests/
     # Mirror src/ structure, includes Excel fixtures
@@ -156,12 +157,21 @@ QBO_CLIENT_ID=your_client_id
 QBO_CLIENT_SECRET=your_client_secret
 QBO_REDIRECT_URI=https://lmn-to-qb-invoice.onrender.com/qbo/callback
 QBO_ENVIRONMENT=sandbox  # Use "sandbox" for dev/test, "production" for real companies
+FLASK_SECRET_KEY=your_secret_key  # For Flask session security (auto-generated if not set)
 
 For production (Render):
 DATABASE_URL=postgresql://...  (auto-set when you link a PostgreSQL database)
 LMN_API_TOKEN=your_lmn_bearer_token  # For automatic customer mapping from LMN API
+FLASK_SECRET_KEY=your_secret_key_for_production  # Required for persistent sessions
 Tokens are stored in the database automatically after running `python -m src.qbo.auth setup`
 Legacy: Token env vars (QBO_ACCESS_TOKEN, QBO_REFRESH_TOKEN, etc.) still supported but deprecated
+
+Duplicate Detection
+When processing invoices, the system checks for already-invoiced timesheets in the database. If duplicates are found:
+- A warning is displayed in the results preview showing which timesheets were already invoiced
+- An option appears to skip those duplicate invoices before creating new ones
+- Invoice creation records jobsite_id, timesheet_ids, work_dates, and QBO invoice details for future duplicate detection
+- Database is optional - if not available, duplicate detection is skipped silently
 
 QuickBooks OAuth
 See docs/QB_OAuth.md for full OAuth implementation requirements and details.

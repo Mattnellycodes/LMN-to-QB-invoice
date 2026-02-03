@@ -142,8 +142,9 @@ python -m src.mapping.build_mapping qbo-customers
 After uploading and mapping jobsites (if needed):
 
 1. **Review** - The app shows a preview of all draft invoices
-2. **Adjust Mapping** - Map any new jobsites to QuickBooks customers
-3. **Create** - Click "Create Invoices" to create draft invoices in QuickBooks
+2. **Check for Duplicates** - If any timesheets have already been invoiced, they're displayed with a warning. You can skip these to avoid creating duplicate invoices.
+3. **Adjust Mapping** - Map any new jobsites to QuickBooks customers
+4. **Create** - Click "Create Invoices" to create draft invoices in QuickBooks
 
 If using the CLI instead of the web interface:
 

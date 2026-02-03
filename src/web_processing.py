@@ -17,6 +17,7 @@ from src.mapping.customer_mapping import (
     get_qbo_customer_id,
     load_mapping_from_lmn_api,
 )
+from src.db.invoice_history import find_already_invoiced_timesheets
 from src.parsing.lmn_parser import (
     detect_file_type,
     read_data_file,
@@ -29,6 +30,38 @@ class ProcessingError(Exception):
     """Error during file processing."""
 
     pass
+
+
+def check_for_duplicates(invoices: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Check which invoices contain already-invoiced timesheets."""
+    try:
+        all_timesheet_ids = []
+        for inv in invoices:
+            all_timesheet_ids.extend(inv.get("timesheet_ids", []))
+
+        if not all_timesheet_ids:
+            return []
+
+        already_invoiced = find_already_invoiced_timesheets(all_timesheet_ids)
+
+        duplicates = []
+        for inv in invoices:
+            for ts_id in inv.get("timesheet_ids", []):
+                match = next(
+                    (ai for ai in already_invoiced if ai["timesheet_id"] == ts_id),
+                    None
+                )
+                if match:
+                    duplicates.append({
+                        "jobsite_id": inv["jobsite_id"],
+                        "customer_name": inv["customer_name"],
+                        "timesheet_id": ts_id,
+                        "qbo_invoice_number": match["qbo_invoice_number"],
+                        "created_at": match["created_at"],
+                    })
+        return duplicates
+    except Exception:
+        return []  # DB unavailable - skip check
 
 
 def detect_uploaded_files(
@@ -178,14 +211,19 @@ def process_uploaded_files(
             mapped_count += 1
             total_amount += inv_dict["total"]
 
+    # Check for already-invoiced timesheets
+    duplicates = check_for_duplicates(all_invoices)
+
     return {
         "invoices": all_invoices,
         "unmapped_jobsites": unmapped_jobsites,
+        "duplicates": duplicates,
         "total_amount": total_amount,
         "summary": {
             "total_jobsites": len(invoices),
             "mapped_jobsites": mapped_count,
             "unmapped_jobsites": len(unmapped_jobsites),
+            "duplicates_found": len(duplicates),
             "total_line_items": sum(len(inv["line_items"]) for inv in all_invoices),
         },
     }
@@ -262,14 +300,19 @@ def process_csv_files(
             mapped_count += 1
             total_amount += inv_dict["total"]
 
+    # Check for already-invoiced timesheets
+    duplicates = check_for_duplicates(all_invoices)
+
     return {
         "invoices": all_invoices,  # Store ALL invoices
         "unmapped_jobsites": unmapped_jobsites,
+        "duplicates": duplicates,
         "total_amount": total_amount,
         "summary": {
             "total_jobsites": len(invoices),
             "mapped_jobsites": mapped_count,
             "unmapped_jobsites": len(unmapped_jobsites),
+            "duplicates_found": len(duplicates),
             "total_line_items": sum(len(inv["line_items"]) for inv in all_invoices),
         },
     }

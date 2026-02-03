@@ -432,10 +432,16 @@ def results():
     all_invoices = result.get("invoices", [])
     mapped_invoices = [inv for inv in all_invoices if inv.get("qbo_customer_id")]
 
+    # Get duplicates info
+    duplicates = result.get("duplicates", [])
+    duplicate_jobsite_ids = list(set(d["jobsite_id"] for d in duplicates))
+
     # Build display result with only mapped invoices
     display_result = {
         "invoices": mapped_invoices,
         "skipped_jobsites": result.get("skipped_jobsites", []),
+        "duplicates": duplicates,
+        "duplicate_jobsite_ids": duplicate_jobsite_ids,
         "total_amount": sum(inv["total"] for inv in mapped_invoices),
         "summary": {
             "total_jobsites": len(all_invoices),
@@ -464,6 +470,18 @@ def create_invoices():
     if not mapped_invoices:
         flash("No mapped invoices to create.", "warning")
         return redirect(url_for("results"))
+
+    # Handle skip_duplicates option
+    if request.form.get("skip_duplicates"):
+        duplicates = result.get("duplicates", [])
+        duplicate_jobsite_ids = set(d["jobsite_id"] for d in duplicates)
+        mapped_invoices = [
+            inv for inv in mapped_invoices
+            if inv["jobsite_id"] not in duplicate_jobsite_ids
+        ]
+        if not mapped_invoices:
+            flash("No invoices to create after skipping duplicates.", "info")
+            return redirect(url_for("results"))
 
     try:
         invoice_results = create_qbo_invoices(mapped_invoices)

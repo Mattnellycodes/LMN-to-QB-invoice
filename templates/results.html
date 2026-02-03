@@ -11,6 +11,30 @@
 </div>
 {% endif %}
 
+{% if result.duplicates %}
+<div class="flash warning">
+    <strong>Warning: {{ result.duplicates|length }} timesheet(s) already invoiced</strong>
+    <details style="margin-top: 10px;">
+        <summary style="cursor: pointer;">View details</summary>
+        <table style="margin-top: 10px; font-size: 0.9em;">
+            <thead>
+                <tr><th>Customer</th><th>Timesheet</th><th>Invoice #</th><th>Created</th></tr>
+            </thead>
+            <tbody>
+                {% for dup in result.duplicates %}
+                <tr>
+                    <td>{{ dup.customer_name }}</td>
+                    <td>{{ dup.timesheet_id }}</td>
+                    <td>{{ dup.qbo_invoice_number }}</td>
+                    <td>{{ dup.created_at[:10] if dup.created_at else '-' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </details>
+</div>
+{% endif %}
+
 <h2>Summary</h2>
 <table>
     <tr>
@@ -108,6 +132,14 @@
 </details>
 
 <form action="{{ url_for('create_invoices') }}" method="post" class="mt-20">
+    {% if result.duplicate_jobsite_ids %}
+    <div style="margin-bottom: 15px; padding: 10px; background: #fff3cd; border-radius: 4px;">
+        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+            <input type="checkbox" name="skip_duplicates" value="1" checked>
+            <span>Skip {{ result.duplicate_jobsite_ids|length }} jobsite(s) with already-invoiced timesheets</span>
+        </label>
+    </div>
+    {% endif %}
     <button type="submit" class="btn btn-success">Create Draft Invoices in QuickBooks</button>
     <a href="{{ url_for('upload') }}" class="btn btn-secondary" style="margin-left: 10px;">Start Over</a>
 </form>
