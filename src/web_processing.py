@@ -322,24 +322,24 @@ def clean_service_data(df: pd.DataFrame) -> pd.DataFrame:
 def invoice_to_dict(invoice: InvoiceData) -> Dict[str, Any]:
     """Convert InvoiceData to dict for JSON serialization."""
     return {
-        "jobsite_id": invoice.jobsite_id,
-        "jobsite_name": invoice.jobsite_name,
-        "customer_name": invoice.customer_name,
-        "invoice_date": invoice.invoice_date,
+        "jobsite_id": str(invoice.jobsite_id),
+        "jobsite_name": str(invoice.jobsite_name),
+        "customer_name": str(invoice.customer_name),
+        "invoice_date": str(invoice.invoice_date),
         "line_items": [
             {
-                "description": item.description,
-                "quantity": item.quantity,
-                "rate": item.rate,
-                "amount": item.amount,
+                "description": str(item.description),
+                "quantity": float(item.quantity),
+                "rate": float(item.rate),
+                "amount": float(item.amount),
             }
             for item in invoice.line_items
         ],
-        "subtotal": invoice.subtotal,
-        "direct_payment_fee": invoice.direct_payment_fee,
-        "total": invoice.total,
-        "timesheet_ids": invoice.timesheet_ids,
-        "work_dates": invoice.work_dates,
+        "subtotal": float(invoice.subtotal),
+        "direct_payment_fee": float(invoice.direct_payment_fee),
+        "total": float(invoice.total),
+        "timesheet_ids": [str(tid) for tid in invoice.timesheet_ids],
+        "work_dates": [str(d) for d in invoice.work_dates],
     }
 
 
