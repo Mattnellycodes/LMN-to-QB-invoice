@@ -1,13 +1,13 @@
 CLAUDE.md - LMN to QuickBooks Invoice Automation
 Project Overview
-Automates the creation of QuickBooks Online invoices from LMN timesheet exports for a landscaping company. The tool reads CSV exports from LMN, calculates billable hours (including drive time allocation), extracts materials/services, and creates draft invoices in QBO for manual review before sending.
+Automates the creation of QuickBooks Online invoices from LMN timesheet exports for a landscaping company. The tool reads CSV or Excel exports from LMN, calculates billable hours (including drive time allocation), extracts materials/services, and creates draft invoices in QBO for manual review before sending.
 See docs/IMPLEMENTATION_PLAN.md for detailed technical specifications.
 Code Design Philosophy
 Modular Design
 
 Each component should do one thing well
 Keep functions small and focused (ideally < 30 lines)
-Separate concerns: CSV parsing, time calculations, drive time allocation, QBO API
+Separate concerns: file parsing, time calculations, drive time allocation, QBO API
 Use clear interfaces between modules
 
 Simplicity First

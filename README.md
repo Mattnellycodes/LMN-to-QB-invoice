@@ -238,7 +238,7 @@ pytest tests/ -v
 ```
 src/
 ├── main.py                 # CLI entry point
-├── parsing/                # CSV parsing
+├── parsing/                # File parsing (CSV/Excel)
 ├── calculations/           # Time and drive allocation
 ├── invoice/                # Invoice building
 ├── qbo/                    # QuickBooks API
