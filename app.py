@@ -361,12 +361,9 @@ def mapping_search():
 @app.route("/mapping/save", methods=["POST"])
 @require_qbo_auth
 def mapping_save():
-    """Save a single customer mapping."""
-    from src.mapping.customer_mapping import (
-        CustomerMapping,
-        load_customer_mapping,
-        save_customer_mapping,
-    )
+    """Save a single customer mapping override to database."""
+    from src.mapping.customer_mapping import CustomerMapping
+    from src.db.customer_overrides import save_customer_override
 
     data = request.json
     jobsite_id = data.get("jobsite_id")
@@ -377,13 +374,12 @@ def mapping_save():
         return jsonify({"error": "Missing jobsite_id or qbo_customer_id"}), 400
 
     try:
-        mappings = load_customer_mapping()
-        mappings[jobsite_id] = CustomerMapping(
+        mapping = CustomerMapping(
             jobsite_id=jobsite_id,
             qbo_customer_id=qbo_customer_id,
             qbo_display_name=qbo_display_name,
         )
-        save_customer_mapping(mappings)
+        save_customer_override(mapping)
 
         # Update session data
         result = session.get("processing_result", {})

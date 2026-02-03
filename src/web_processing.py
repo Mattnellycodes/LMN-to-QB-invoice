@@ -15,7 +15,7 @@ from src.mapping.customer_mapping import (
     CustomerMapping,
     find_unmapped_jobsites,
     get_qbo_customer_id,
-    load_customer_mapping,
+    load_mapping_from_lmn_api,
 )
 from src.parsing.lmn_parser import (
     detect_file_type,
@@ -149,7 +149,7 @@ def process_uploaded_files(
     invoices = build_all_invoices(jobsite_hours_list, service_df, invoice_date)
 
     # Load customer mappings
-    mappings = load_customer_mapping()
+    mappings = load_mapping_from_lmn_api()
 
     # Find unmapped jobsites
     jobsite_ids = [inv.jobsite_id for inv in invoices]
@@ -233,7 +233,7 @@ def process_csv_files(
     invoices = build_all_invoices(jobsite_hours_list, service_df, invoice_date)
 
     # Load customer mappings
-    mappings = load_customer_mapping()
+    mappings = load_mapping_from_lmn_api()
 
     # Find unmapped jobsites
     jobsite_ids = [inv.jobsite_id for inv in invoices]
