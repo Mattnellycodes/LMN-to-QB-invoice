@@ -229,6 +229,33 @@ def is_token_valid(tokens: Optional[dict]) -> bool:
         return False
 
 
+TOKEN_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+    "config",
+    ".qbo_tokens.json",
+)
+
+
+def clear_stored_tokens() -> bool:
+    """
+    Clear locally stored tokens (for CLI usage).
+
+    Returns:
+        True if tokens were cleared, False if no token file existed
+    """
+    import json
+
+    if os.path.exists(TOKEN_FILE):
+        try:
+            os.remove(TOKEN_FILE)
+            logger.info(f"Cleared token file: {TOKEN_FILE}")
+            return True
+        except OSError as e:
+            logger.error(f"Failed to remove token file: {e}")
+            return False
+    return False
+
+
 def get_token_status(tokens: Optional[dict]) -> dict:
     """Get detailed token status for debugging/display."""
     if not tokens:

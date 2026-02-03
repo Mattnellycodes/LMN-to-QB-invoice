@@ -24,6 +24,33 @@
 </table>
 
 {% if result.invoices %}
+<details class="mt-20" open>
+    <summary style="cursor: pointer; font-weight: 500; font-size: 1.1em;">Customer Mapping Verification</summary>
+    <p style="margin: 10px 0; color: #666;">Confirm LMN customers are mapped to the correct QuickBooks customers:</p>
+    <table style="margin-bottom: 20px;">
+        <thead>
+            <tr>
+                <th>LMN Customer</th>
+                <th>→</th>
+                <th>QuickBooks Customer</th>
+                <th>QBO ID</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for invoice in result.invoices %}
+            <tr>
+                <td>{{ invoice.customer_name }}</td>
+                <td style="text-align: center;">→</td>
+                <td style="color: {% if invoice.qbo_display_name %}#28a745{% else %}#dc3545{% endif %};">
+                    {{ invoice.qbo_display_name or '(NOT MAPPED)' }}
+                </td>
+                <td>{{ invoice.qbo_customer_id or '-' }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</details>
+
 <h2 class="mt-20">Invoices to Create</h2>
 
 <table>

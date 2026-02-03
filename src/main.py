@@ -22,6 +22,42 @@ from src.mapping.interactive_mapping import (
 from src.qbo.invoices import create_draft_invoice
 
 
+def check_already_invoiced(jobsite_hours: List) -> Dict[str, List[Dict]]:
+    """
+    Check which timesheets have already been invoiced.
+
+    Returns:
+        {jobsite_id: [{"timesheet_id": ..., "qbo_invoice_number": ...}]}
+    """
+    try:
+        from src.db.invoice_history import find_already_invoiced_timesheets
+
+        # Collect all timesheet IDs
+        all_timesheet_ids = []
+        for jh in jobsite_hours:
+            all_timesheet_ids.extend(jh.timesheet_ids)
+
+        if not all_timesheet_ids:
+            return {}
+
+        already_invoiced = find_already_invoiced_timesheets(all_timesheet_ids)
+
+        # Group by jobsite
+        result = {}
+        for jh in jobsite_hours:
+            matches = [
+                inv for inv in already_invoiced
+                if inv["timesheet_id"] in jh.timesheet_ids
+            ]
+            if matches:
+                result[jh.jobsite_id] = matches
+
+        return result
+    except Exception:
+        # Database not available - skip overlap check
+        return {}
+
+
 def process_lmn_exports(
     time_data_path: str,
     service_data_path: str,
@@ -29,6 +65,7 @@ def process_lmn_exports(
     invoice_date: Optional[str] = None,
     dry_run: bool = False,
     use_csv_mapping: bool = False,
+    skip_processed: bool = False,
 ) -> Dict:
     """
     Main processing function: LMN CSVs -> QBO draft invoices.
@@ -40,6 +77,7 @@ def process_lmn_exports(
         invoice_date: Invoice date in YYYY-MM-DD format (optional, uses today)
         dry_run: If True, don't create invoices in QBO, just show what would be created
         use_csv_mapping: If True, use CSV mapping; if False (default), use LMN API
+        skip_processed: If True, skip timesheets that were already invoiced
 
     Returns:
         Summary dict with created, skipped, and errored invoices
@@ -62,6 +100,32 @@ def process_lmn_exports(
     print("Calculating billable hours...")
     jobsite_hours = calculate_billable_hours(time_df)
     print(f"  Found {len(jobsite_hours)} unique jobsites")
+
+    # Check for already-invoiced timesheets
+    already_invoiced = check_already_invoiced(jobsite_hours)
+    if already_invoiced:
+        print()
+        print("WARNING: Some timesheets have already been invoiced:")
+        print("-" * 70)
+        for jobsite_id, invoiced_list in already_invoiced.items():
+            jh = next((j for j in jobsite_hours if j.jobsite_id == jobsite_id), None)
+            customer = jh.customer_name if jh else "Unknown"
+            for inv in invoiced_list:
+                print(f"  {customer} - Timesheet {inv['timesheet_id']} -> Invoice #{inv['qbo_invoice_number']}")
+        print("-" * 70)
+
+        if skip_processed:
+            print("  Skipping already-invoiced timesheets (--skip-processed)")
+            # Filter out jobsites where ALL timesheets are already invoiced
+            invoiced_jobsite_ids = set(already_invoiced.keys())
+            jobsite_hours = [
+                jh for jh in jobsite_hours
+                if jh.jobsite_id not in invoiced_jobsite_ids
+            ]
+            print(f"  Remaining jobsites: {len(jobsite_hours)}")
+        else:
+            print("  Use --skip-processed to automatically skip already-invoiced timesheets")
+        print()
 
     # Load customer mapping
     print()
@@ -90,6 +154,21 @@ def process_lmn_exports(
     print("Building invoices...")
     invoices = build_all_invoices(jobsite_hours, service_df, invoice_date)
     print(f"  Built {len(invoices)} invoices with billable amounts")
+
+    # Display mapping verification
+    print()
+    print("Customer Mapping Verification:")
+    print("-" * 70)
+    print(f"{'LMN Customer':<25} {'QBO Customer':<25} {'JobsiteID':<15}")
+    print("-" * 70)
+    for invoice in invoices:
+        mapping = mappings.get(str(invoice.jobsite_id))
+        qbo_name = mapping.qbo_display_name if mapping else "(NOT MAPPED)"
+        lmn_name = invoice.customer_name[:24] if len(invoice.customer_name) > 24 else invoice.customer_name
+        qbo_display = qbo_name[:24] if len(qbo_name) > 24 else qbo_name
+        print(f"{lmn_name:<25} {qbo_display:<25} {invoice.jobsite_id:<15}")
+    print("-" * 70)
+    print()
 
     # Create invoices in QBO
     print()
@@ -173,9 +252,6 @@ def preview_invoices(
 
 
 def main():
-    # TODO: Add date overlap detection - warn when uploaded file dates overlap
-    # with dates from previous run to prevent duplicate invoice creation.
-
     parser = argparse.ArgumentParser(
         description="Create QuickBooks invoices from LMN timesheet exports"
     )
@@ -212,6 +288,11 @@ def main():
         action="store_true",
         help="Initialize database tables and exit",
     )
+    parser.add_argument(
+        "--skip-processed",
+        action="store_true",
+        help="Skip timesheets that have already been invoiced",
+    )
 
     args = parser.parse_args()
 
@@ -237,6 +318,7 @@ def main():
         invoice_date=args.invoice_date,
         dry_run=args.preview,
         use_csv_mapping=args.use_csv_mapping,
+        skip_processed=args.skip_processed,
     )
 
     return 0

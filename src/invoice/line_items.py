@@ -33,6 +33,8 @@ class InvoiceData:
     subtotal: float = 0
     direct_payment_fee: float = 0
     total: float = 0
+    timesheet_ids: list[str] = field(default_factory=list)
+    work_dates: list[str] = field(default_factory=list)
 
 
 def calculate_direct_payment_fee(subtotal: float) -> float:
@@ -131,6 +133,8 @@ def build_invoice(
         jobsite_name=jobsite_hours.jobsite_name,
         customer_name=jobsite_hours.customer_name,
         invoice_date=invoice_date,
+        timesheet_ids=jobsite_hours.timesheet_ids or [],
+        work_dates=jobsite_hours.dates or [],
     )
 
     # Add labor line item (if there are billable hours)

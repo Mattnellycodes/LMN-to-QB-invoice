@@ -20,6 +20,11 @@ class JobsiteHours:
     total_billable_hours: float
     billable_rate: float
     dates: List[str]
+    timesheet_ids: List[str] = None  # Track which timesheets contributed to this invoice
+
+    def __post_init__(self):
+        if self.timesheet_ids is None:
+            self.timesheet_ids = []
 
 
 def is_drive_time(cost_code: str) -> bool:
@@ -117,6 +122,7 @@ def calculate_billable_hours(time_df: pd.DataFrame) -> List[JobsiteHours]:
                 total_billable_hours=round(work + drive, 2),
                 billable_rate=meta.get("billable_rate", 0),
                 dates=meta.get("dates", []),
+                timesheet_ids=meta.get("timesheet_ids", []),
             )
         )
 
@@ -125,10 +131,10 @@ def calculate_billable_hours(time_df: pd.DataFrame) -> List[JobsiteHours]:
 
 def get_jobsite_metadata(time_df: pd.DataFrame) -> Dict[str, dict]:
     """
-    Extract metadata for each jobsite (name, customer, rate, dates).
+    Extract metadata for each jobsite (name, customer, rate, dates, timesheet_ids).
 
     Returns:
-        {jobsite_id: {jobsite_name, customer_name, billable_rate, dates}}
+        {jobsite_id: {jobsite_name, customer_name, billable_rate, dates, timesheet_ids}}
     """
     metadata = {}
 
@@ -143,11 +149,15 @@ def get_jobsite_metadata(time_df: pd.DataFrame) -> Dict[str, dict]:
         # Collect unique dates
         dates = sorted(group["EndDate"].dropna().unique().tolist())
 
+        # Collect unique timesheet IDs
+        timesheet_ids = sorted(group["TimesheetID"].dropna().astype(str).unique().tolist())
+
         metadata[jobsite_id] = {
             "jobsite_name": group["Jobsite"].iloc[0],
             "customer_name": group["CustomerName"].iloc[0],
             "billable_rate": rate,
             "dates": dates,
+            "timesheet_ids": timesheet_ids,
         }
 
     return metadata

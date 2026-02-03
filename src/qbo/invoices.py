@@ -82,13 +82,33 @@ def create_draft_invoice(
         data = response.json()
         invoice = data.get("Invoice", {})
 
+        invoice_id = invoice.get("Id")
+        invoice_number = invoice.get("DocNumber")
+        total_amt = float(invoice.get("TotalAmt", 0))
+
+        # Record invoice history for duplicate detection
+        try:
+            from src.db.invoice_history import record_invoice_creation
+            if invoice_id and invoice_data.timesheet_ids:
+                record_invoice_creation(
+                    jobsite_id=invoice_data.jobsite_id,
+                    timesheet_ids=invoice_data.timesheet_ids,
+                    work_dates=invoice_data.work_dates,
+                    qbo_invoice_id=invoice_id,
+                    qbo_invoice_number=invoice_number or "",
+                    total_amount=total_amt,
+                )
+        except Exception:
+            # Database not available - skip history recording
+            pass
+
         return InvoiceResult(
             success=True,
             jobsite_id=invoice_data.jobsite_id,
             customer_name=invoice_data.customer_name,
-            invoice_id=invoice.get("Id"),
-            invoice_number=invoice.get("DocNumber"),
-            total=float(invoice.get("TotalAmt", 0)),
+            invoice_id=invoice_id,
+            invoice_number=invoice_number,
+            total=total_amt,
         )
 
     except requests.exceptions.HTTPError as e:

@@ -45,6 +45,7 @@ def db_cursor() -> Generator:
 def init_db() -> None:
     """Initialize database tables."""
     with db_cursor() as cursor:
+        # Customer mapping overrides table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS customer_mapping_overrides (
                 jobsite_id VARCHAR(50) PRIMARY KEY,
@@ -55,4 +56,31 @@ def init_db() -> None:
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-    print("Database initialized: customer_mapping_overrides table ready")
+
+        # Invoice history table - tracks which timesheets have been invoiced
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS invoice_history (
+                id SERIAL PRIMARY KEY,
+                jobsite_id VARCHAR(50) NOT NULL,
+                timesheet_ids TEXT[] NOT NULL,
+                work_dates TEXT[] NOT NULL,
+                qbo_invoice_id VARCHAR(50) NOT NULL,
+                qbo_invoice_number VARCHAR(50),
+                total_amount DECIMAL(10, 2),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Index for fast timesheet lookups
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_invoice_history_timesheet_ids
+            ON invoice_history USING GIN (timesheet_ids)
+        """)
+
+        # Index for jobsite + date lookups
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_invoice_history_jobsite_dates
+            ON invoice_history (jobsite_id)
+        """)
+
+    print("Database initialized: customer_mapping_overrides, invoice_history tables ready")
