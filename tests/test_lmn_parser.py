@@ -1,18 +1,38 @@
-"""Tests for LMN CSV parsing."""
+"""Tests for LMN file parsing (CSV and Excel)."""
 
 import pytest
 import pandas as pd
-from io import StringIO
+from io import BytesIO, StringIO
 
 from src.parsing.lmn_parser import (
     TIME_DATA_REQUIRED_COLUMNS,
     SERVICE_DATA_REQUIRED_COLUMNS,
+    detect_file_type,
+    read_data_file,
     parse_time_data,
     parse_service_data,
     validate_columns,
     filter_billable_services,
     filter_uninvoiced,
+    is_excel_file,
+    is_csv_file,
 )
+
+
+# =============================================================================
+# Test Data
+# =============================================================================
+
+TIME_DATA_COLUMNS = [
+    "TimesheetID", "JobsiteID", "Jobsite", "CustomerName",
+    "TaskName", "CostCode", "Man Hours", "Billable Rate", "EndDate"
+]
+
+SERVICE_DATA_COLUMNS = [
+    "TimesheetID", "JobsiteID", "Jobsite", "CustomerName",
+    "Service_Activity", "Timesheet Qty", "Invoice Type",
+    "Unit Price", "Total Price", "Invoiced", "EndDate"
+]
 
 
 # =============================================================================
@@ -44,6 +64,149 @@ TS001,JS002,456 Oak Ave,Jane Doe,Plants - Perennials,10,Per Unit,$25.00,$250.00,
     csv_path = tmp_path / "service_data.csv"
     csv_path.write_text(csv_content)
     return csv_path
+
+
+@pytest.fixture
+def valid_time_data_excel(tmp_path):
+    """Create a valid time data Excel file."""
+    df = pd.DataFrame({
+        "TimesheetID": ["TS001", "TS001", "TS001"],
+        "JobsiteID": ["JS001", "JS001", "JS002"],
+        "Jobsite": ["123 Main St", "123 Main St", "456 Oak Ave"],
+        "CustomerName": ["John Smith", "John Smith", "Jane Doe"],
+        "TaskName": ["General Maintenance", "Drive Time", "General Maintenance"],
+        "CostCode": [200, 900, 200],
+        "Man Hours": [2.5, 0.5, 3.0],
+        "Billable Rate": ["$75.00", "$0.00", "$75.00"],
+        "EndDate": ["2026-01-15", "2026-01-15", "2026-01-15"],
+    })
+    path = tmp_path / "time_export.xlsx"
+    df.to_excel(path, index=False)
+    return path
+
+
+@pytest.fixture
+def valid_service_data_excel(tmp_path):
+    """Create a valid service data Excel file."""
+    df = pd.DataFrame({
+        "TimesheetID": ["TS001", "TS001", "TS001"],
+        "JobsiteID": ["JS001", "JS001", "JS002"],
+        "Jobsite": ["123 Main St", "123 Main St", "456 Oak Ave"],
+        "CustomerName": ["John Smith", "John Smith", "Jane Doe"],
+        "Service_Activity": ["Mulch - Premium", "Labor Included", "Plants - Perennials"],
+        "Timesheet Qty": [5, 1, 10],
+        "Invoice Type": ["Per Unit", "Included", "Per Unit"],
+        "Unit Price": ["$45.00", "$0.00", "$25.00"],
+        "Total Price": ["$225.00", "$0.00", "$250.00"],
+        "Invoiced": ["N", "N", "Y"],
+        "EndDate": ["2026-01-15", "2026-01-15", "2026-01-15"],
+    })
+    path = tmp_path / "service_export.xlsx"
+    df.to_excel(path, index=False)
+    return path
+
+
+# =============================================================================
+# Test is_excel_file and is_csv_file
+# =============================================================================
+
+
+class TestFileTypeHelpers:
+    """Test file type detection helpers."""
+
+    def test_is_excel_file_xlsx(self):
+        assert is_excel_file("data.xlsx") is True
+        assert is_excel_file("DATA.XLSX") is True
+
+    def test_is_excel_file_xls(self):
+        assert is_excel_file("data.xls") is True
+
+    def test_is_excel_file_csv(self):
+        assert is_excel_file("data.csv") is False
+
+    def test_is_csv_file_csv(self):
+        assert is_csv_file("data.csv") is True
+        assert is_csv_file("DATA.CSV") is True
+
+    def test_is_csv_file_excel(self):
+        assert is_csv_file("data.xlsx") is False
+
+
+# =============================================================================
+# Test detect_file_type
+# =============================================================================
+
+
+class TestDetectFileType:
+    """Test detect_file_type function."""
+
+    def test_detects_time_from_filename(self):
+        """Detects time_data when filename contains 'time'."""
+        assert detect_file_type("time_data.csv") == "time_data"
+        assert detect_file_type("Time Export.xlsx") == "time_data"
+        assert detect_file_type("job_history_time.xlsx") == "time_data"
+
+    def test_detects_service_from_filename(self):
+        """Detects service_data when filename contains 'service'."""
+        assert detect_file_type("service_data.csv") == "service_data"
+        assert detect_file_type("Service Export.xlsx") == "service_data"
+        assert detect_file_type("job_history_service.xlsx") == "service_data"
+
+    def test_raises_on_ambiguous_filename(self):
+        """Raises ValueError when filename doesn't indicate type."""
+        with pytest.raises(ValueError) as exc_info:
+            detect_file_type("export.xlsx")
+        assert "Could not detect file type" in str(exc_info.value)
+
+    def test_detects_from_columns_time(self, valid_time_data_excel):
+        """Detects time_data from column inspection."""
+        with open(valid_time_data_excel, "rb") as f:
+            content = BytesIO(f.read())
+        # Use ambiguous filename to force column detection
+        result = detect_file_type("export.xlsx", content)
+        assert result == "time_data"
+
+    def test_detects_from_columns_service(self, valid_service_data_excel):
+        """Detects service_data from column inspection."""
+        with open(valid_service_data_excel, "rb") as f:
+            content = BytesIO(f.read())
+        result = detect_file_type("export.xlsx", content)
+        assert result == "service_data"
+
+
+# =============================================================================
+# Test read_data_file
+# =============================================================================
+
+
+class TestReadDataFile:
+    """Test read_data_file function."""
+
+    def test_reads_csv_from_path(self, valid_time_data_csv):
+        """Reads CSV file from path."""
+        df = read_data_file(valid_time_data_csv)
+        assert len(df) == 3
+        assert "TimesheetID" in df.columns
+
+    def test_reads_excel_from_path(self, valid_time_data_excel):
+        """Reads Excel file from path."""
+        df = read_data_file(valid_time_data_excel)
+        assert len(df) == 3
+        assert "TimesheetID" in df.columns
+
+    def test_reads_csv_from_bytesio(self, valid_time_data_csv):
+        """Reads CSV from BytesIO."""
+        with open(valid_time_data_csv, "rb") as f:
+            content = BytesIO(f.read())
+        df = read_data_file(content, "time_data.csv")
+        assert len(df) == 3
+
+    def test_reads_excel_from_bytesio(self, valid_time_data_excel):
+        """Reads Excel from BytesIO."""
+        with open(valid_time_data_excel, "rb") as f:
+            content = BytesIO(f.read())
+        df = read_data_file(content, "time_export.xlsx")
+        assert len(df) == 3
 
 
 # =============================================================================
@@ -88,6 +251,27 @@ class TestParseTimeData:
         assert len(df) == 3
         assert "TimesheetID" in df.columns
         assert "Man Hours" in df.columns
+
+    def test_parses_valid_excel(self, valid_time_data_excel):
+        """Parses valid time data Excel successfully."""
+        df = parse_time_data(valid_time_data_excel)
+
+        assert len(df) == 3
+        assert "TimesheetID" in df.columns
+
+    def test_parses_bytesio_csv(self, valid_time_data_csv):
+        """Parses CSV from BytesIO."""
+        with open(valid_time_data_csv, "rb") as f:
+            content = BytesIO(f.read())
+        df = parse_time_data(content, "time_data.csv")
+        assert len(df) == 3
+
+    def test_parses_bytesio_excel(self, valid_time_data_excel):
+        """Parses Excel from BytesIO."""
+        with open(valid_time_data_excel, "rb") as f:
+            content = BytesIO(f.read())
+        df = parse_time_data(content, "time_export.xlsx")
+        assert len(df) == 3
 
     def test_converts_man_hours_to_numeric(self, valid_time_data_csv):
         """Converts Man Hours column to numeric."""
@@ -136,6 +320,27 @@ class TestParseServiceData:
 
         assert len(df) == 3
         assert "Service_Activity" in df.columns
+
+    def test_parses_valid_excel(self, valid_service_data_excel):
+        """Parses valid service data Excel successfully."""
+        df = parse_service_data(valid_service_data_excel)
+
+        assert len(df) == 3
+        assert "Service_Activity" in df.columns
+
+    def test_parses_bytesio_csv(self, valid_service_data_csv):
+        """Parses CSV from BytesIO."""
+        with open(valid_service_data_csv, "rb") as f:
+            content = BytesIO(f.read())
+        df = parse_service_data(content, "service_data.csv")
+        assert len(df) == 3
+
+    def test_parses_bytesio_excel(self, valid_service_data_excel):
+        """Parses Excel from BytesIO."""
+        with open(valid_service_data_excel, "rb") as f:
+            content = BytesIO(f.read())
+        df = parse_service_data(content, "service_export.xlsx")
+        assert len(df) == 3
 
     def test_cleans_price_columns(self, valid_service_data_csv):
         """Removes $ and converts price columns to numeric."""

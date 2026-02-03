@@ -189,7 +189,16 @@ def qbo_callback():
 @app.route("/qbo/disconnect")
 def qbo_disconnect():
     """Clear stored tokens and disconnect from QuickBooks."""
+    # Clear session tokens
     session.pop("qbo_tokens", None)
+
+    # Clear local token file (if exists)
+    try:
+        from src.qbo.auth import clear_stored_tokens
+        clear_stored_tokens()
+    except Exception:
+        pass  # Ignore errors - file may not exist
+
     flash("Disconnected from QuickBooks.", "info")
     return redirect(url_for("index"))
 
@@ -209,41 +218,79 @@ def auth_status():
 
 
 # =============================================================================
-# CSV Upload & Processing
+# File Upload & Processing
 # =============================================================================
+
+ALLOWED_EXTENSIONS = {".xlsx", ".xls", ".csv"}
+
+
+def is_allowed_file(filename: str) -> bool:
+    """Check if file has an allowed extension."""
+    ext = os.path.splitext(filename.lower())[1]
+    return ext in ALLOWED_EXTENSIONS
 
 
 @app.route("/upload")
 @require_qbo_auth
 def upload():
-    """Page with drag-and-drop UI for uploading CSVs."""
+    """Page with drag-and-drop UI for uploading files."""
     return render_template("upload.html")
+
+
+@app.route("/upload/detect", methods=["POST"])
+@require_qbo_auth
+def upload_detect():
+    """AJAX endpoint for live file type detection preview."""
+    from src.web_processing import detect_uploaded_files
+
+    files = request.files.getlist("files")
+
+    if not files:
+        return jsonify({"files": [], "valid": False, "error": "No files uploaded"})
+
+    # Prepare files for detection
+    file_list = []
+    for f in files:
+        if f.filename and is_allowed_file(f.filename):
+            content = io.BytesIO(f.read())
+            file_list.append((f.filename, content))
+
+    if not file_list:
+        return jsonify({
+            "files": [],
+            "valid": False,
+            "error": "No valid files. Please upload .xlsx, .xls, or .csv files.",
+        })
+
+    result = detect_uploaded_files(file_list)
+    return jsonify(result)
 
 
 @app.route("/upload", methods=["POST"])
 @require_qbo_auth
 def upload_post():
-    """Process uploaded CSV files."""
-    from src.web_processing import process_csv_files, ProcessingError
+    """Process uploaded files (CSV or Excel)."""
+    from src.web_processing import process_uploaded_files, ProcessingError
 
-    time_file = request.files.get("time_data")
-    service_file = request.files.get("service_data")
+    files = request.files.getlist("files")
 
-    if not time_file or not service_file:
-        flash("Please upload both Time Data and Service Data CSV files.", "error")
+    if not files or not any(f.filename for f in files):
+        flash("Please upload Time Data and Service Data files.", "error")
         return redirect(url_for("upload"))
 
-    if not time_file.filename.endswith(".csv") or not service_file.filename.endswith(".csv"):
-        flash("Both files must be CSV files.", "error")
+    # Filter to allowed files and prepare for processing
+    file_list = []
+    for f in files:
+        if f.filename and is_allowed_file(f.filename):
+            content = io.BytesIO(f.read())
+            file_list.append((f.filename, content))
+
+    if len(file_list) < 2:
+        flash("Please upload both Time Data and Service Data files (.xlsx, .xls, or .csv).", "error")
         return redirect(url_for("upload"))
 
     try:
-        # Read file contents
-        time_data = io.StringIO(time_file.read().decode("utf-8"))
-        service_data = io.StringIO(service_file.read().decode("utf-8"))
-
-        # Process the CSVs
-        result = process_csv_files(time_data, service_data)
+        result = process_uploaded_files(file_list)
 
         # Store result in session for next steps
         session["processing_result"] = result
@@ -259,6 +306,7 @@ def upload_post():
         flash(f"Error processing files: {e}", "error")
         return redirect(url_for("upload"))
     except Exception as e:
+        logger.exception("Unexpected error processing files")
         flash(f"Unexpected error: {e}", "error")
         return redirect(url_for("upload"))
 
@@ -274,7 +322,7 @@ def mapping():
     """Show unmapped jobsites and allow mapping to QBO customers."""
     result = session.get("processing_result")
     if not result:
-        flash("No data to map. Please upload CSV files first.", "warning")
+        flash("No data to map. Please upload files first.", "warning")
         return redirect(url_for("upload"))
 
     unmapped = result.get("unmapped_jobsites", [])
@@ -381,7 +429,7 @@ def results():
     """Show processing results and invoice preview."""
     result = session.get("processing_result")
     if not result:
-        flash("No data to display. Please upload CSV files first.", "warning")
+        flash("No data to display. Please upload files first.", "warning")
         return redirect(url_for("upload"))
 
     # Filter to only mapped invoices (those with qbo_customer_id)

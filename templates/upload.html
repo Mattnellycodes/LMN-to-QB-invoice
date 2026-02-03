@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Upload CSV Files{% endblock %}
+{% block title %}Upload Files{% endblock %}
 
 {% block head %}
 <style>
@@ -17,9 +17,13 @@
         border-color: #3498db;
         background: #ecf6fd;
     }
-    .upload-zone.has-file {
+    .upload-zone.has-files {
         border-color: #27ae60;
         background: #e8f8f0;
+    }
+    .upload-zone.has-error {
+        border-color: #e74c3c;
+        background: #fdf2f2;
     }
     .upload-zone input[type="file"] {
         display: none;
@@ -36,54 +40,136 @@
         margin-bottom: 0;
         color: #888;
     }
-    .file-name {
-        margin-top: 10px;
-        font-weight: 500;
-        color: #27ae60;
-    }
     .upload-icon {
         font-size: 48px;
         color: #ccc;
         margin-bottom: 10px;
     }
-    .upload-grid {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 20px;
+
+    .file-list {
+        margin-top: 20px;
+        text-align: left;
     }
-    @media (max-width: 600px) {
-        .upload-grid {
-            grid-template-columns: 1fr;
-        }
+    .file-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 15px;
+        background: #fff;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        margin-bottom: 8px;
+    }
+    .file-item.error {
+        border-color: #e74c3c;
+        background: #fdf2f2;
+    }
+    .file-info {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+    .file-name {
+        font-weight: 500;
+    }
+    .file-badge {
+        padding: 3px 8px;
+        border-radius: 3px;
+        font-size: 12px;
+        font-weight: 500;
+    }
+    .badge-time {
+        background: #d4edda;
+        color: #155724;
+    }
+    .badge-service {
+        background: #cce5ff;
+        color: #004085;
+    }
+    .badge-error {
+        background: #f8d7da;
+        color: #721c24;
+    }
+    .file-remove {
+        background: none;
+        border: none;
+        color: #888;
+        cursor: pointer;
+        font-size: 18px;
+        padding: 0 5px;
+    }
+    .file-remove:hover {
+        color: #e74c3c;
+    }
+    .file-error {
+        font-size: 12px;
+        color: #e74c3c;
+        margin-top: 4px;
+    }
+
+    .validation-summary {
+        margin-top: 20px;
+        padding: 15px;
+        background: #f8f9fa;
+        border-radius: 4px;
+    }
+    .validation-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 5px;
+    }
+    .validation-item:last-child {
+        margin-bottom: 0;
+    }
+    .check-icon {
+        color: #27ae60;
+    }
+    .x-icon {
+        color: #e74c3c;
+    }
+    .pending-icon {
+        color: #888;
+    }
+
+    .instructions-link {
+        margin-top: 15px;
+        font-size: 14px;
+    }
+    .instructions-link a {
+        color: #3498db;
     }
 </style>
 {% endblock %}
 
 {% block content %}
-<h1>Upload CSV Files</h1>
+<h1>Upload LMN Export Files</h1>
 
-<p>Upload your LMN Job History exports. You need both files to create invoices.</p>
+<p>Upload your LMN Job History exports. You need both Time Data and Service Data files.</p>
+<p class="instructions-link">
+    <a href="https://docs.google.com/document/d/1J_hYbSsxYORKLG77RrbUNZY6MmxMTLKOCaqxqx5VHog/edit?usp=sharing" target="_blank">View detailed instructions</a>
+</p>
 
 <form id="upload-form" action="{{ url_for('upload_post') }}" method="post" enctype="multipart/form-data">
-    <div class="upload-grid">
-        <div class="upload-zone" id="time-zone">
-            <label for="time_data">
-                <div class="upload-icon">&#128196;</div>
-                <h3>Time Data CSV</h3>
-                <p>Job History - Time Data export</p>
-                <input type="file" id="time_data" name="time_data" accept=".csv" required>
-                <div class="file-name" id="time-file-name"></div>
-            </label>
-        </div>
+    <div class="upload-zone" id="drop-zone">
+        <label for="files">
+            <div class="upload-icon">&#128196;</div>
+            <h3>Drop files here or click to browse</h3>
+            <p>Accepts .xlsx, .xls, or .csv files</p>
+            <input type="file" id="files" name="files" accept=".xlsx,.xls,.csv" multiple>
+        </label>
+    </div>
 
-        <div class="upload-zone" id="service-zone">
-            <label for="service_data">
-                <div class="upload-icon">&#128196;</div>
-                <h3>Service Data CSV</h3>
-                <p>Job History - Service Data export</p>
-                <input type="file" id="service_data" name="service_data" accept=".csv" required>
-                <div class="file-name" id="service-file-name"></div>
-            </label>
+    <div class="file-list" id="file-list" style="display: none;"></div>
+
+    <div class="validation-summary" id="validation-summary" style="display: none;">
+        <div class="validation-item" id="val-time">
+            <span class="pending-icon" id="val-time-icon">&#9675;</span>
+            <span>Time Data file</span>
+        </div>
+        <div class="validation-item" id="val-service">
+            <span class="pending-icon" id="val-service-icon">&#9675;</span>
+            <span>Service Data file</span>
         </div>
     </div>
 
@@ -95,54 +181,169 @@
 
 {% block scripts %}
 <script>
-    const timeInput = document.getElementById('time_data');
-    const serviceInput = document.getElementById('service_data');
-    const timeZone = document.getElementById('time-zone');
-    const serviceZone = document.getElementById('service-zone');
+    const dropZone = document.getElementById('drop-zone');
+    const fileInput = document.getElementById('files');
+    const fileList = document.getElementById('file-list');
+    const validationSummary = document.getElementById('validation-summary');
     const submitBtn = document.getElementById('submit-btn');
 
-    function updateSubmitButton() {
-        submitBtn.disabled = !(timeInput.files.length && serviceInput.files.length);
-    }
+    // Store files and their detection results
+    let uploadedFiles = new Map(); // filename -> {file, detected_type, error}
 
-    function setupDropZone(zone, input, fileNameEl) {
-        // Drag and drop handlers
-        zone.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            zone.classList.add('dragover');
-        });
+    // Drag and drop handlers
+    dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropZone.classList.add('dragover');
+    });
 
-        zone.addEventListener('dragleave', () => {
-            zone.classList.remove('dragover');
-        });
+    dropZone.addEventListener('dragleave', () => {
+        dropZone.classList.remove('dragover');
+    });
 
-        zone.addEventListener('drop', (e) => {
-            e.preventDefault();
-            zone.classList.remove('dragover');
+    dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('dragover');
+        handleFiles(e.dataTransfer.files);
+    });
 
-            const files = e.dataTransfer.files;
-            if (files.length && files[0].name.endsWith('.csv')) {
-                input.files = files;
-                updateFileDisplay(zone, fileNameEl, files[0].name);
-                updateSubmitButton();
+    // File input change handler
+    fileInput.addEventListener('change', () => {
+        if (fileInput.files.length) {
+            handleFiles(fileInput.files);
+        }
+    });
+
+    function handleFiles(files) {
+        const allowedExtensions = ['.xlsx', '.xls', '.csv'];
+
+        for (const file of files) {
+            const ext = file.name.toLowerCase().substring(file.name.lastIndexOf('.'));
+            if (allowedExtensions.includes(ext)) {
+                uploadedFiles.set(file.name, { file, detected_type: null, error: null });
             }
-        });
+        }
 
-        // File input change handler
-        input.addEventListener('change', () => {
-            if (input.files.length) {
-                updateFileDisplay(zone, fileNameEl, input.files[0].name);
-                updateSubmitButton();
+        if (uploadedFiles.size > 0) {
+            detectFileTypes();
+        }
+    }
+
+    async function detectFileTypes() {
+        const formData = new FormData();
+        for (const [filename, data] of uploadedFiles) {
+            formData.append('files', data.file);
+        }
+
+        try {
+            const response = await fetch('{{ url_for("upload_detect") }}', {
+                method: 'POST',
+                body: formData,
+            });
+
+            const result = await response.json();
+
+            if (response.status === 401) {
+                window.location.href = '{{ url_for("index") }}';
+                return;
             }
+
+            // Update file detection results
+            for (const fileInfo of result.files) {
+                if (uploadedFiles.has(fileInfo.filename)) {
+                    const data = uploadedFiles.get(fileInfo.filename);
+                    data.detected_type = fileInfo.detected_type;
+                    data.error = fileInfo.error;
+                }
+            }
+
+            updateUI(result.valid);
+        } catch (error) {
+            console.error('Detection error:', error);
+        }
+    }
+
+    function updateUI(isValid) {
+        // Update file list
+        fileList.innerHTML = '';
+        fileList.style.display = uploadedFiles.size > 0 ? 'block' : 'none';
+
+        let hasTime = false;
+        let hasService = false;
+        let hasError = false;
+
+        for (const [filename, data] of uploadedFiles) {
+            const item = document.createElement('div');
+            item.className = 'file-item' + (data.error ? ' error' : '');
+
+            let badgeHtml = '';
+            if (data.detected_type === 'time_data') {
+                badgeHtml = '<span class="file-badge badge-time">Time Data</span>';
+                hasTime = true;
+            } else if (data.detected_type === 'service_data') {
+                badgeHtml = '<span class="file-badge badge-service">Service Data</span>';
+                hasService = true;
+            } else if (data.error) {
+                badgeHtml = '<span class="file-badge badge-error">Error</span>';
+                hasError = true;
+            }
+
+            item.innerHTML = `
+                <div class="file-info">
+                    <span class="file-name">${filename}</span>
+                    ${badgeHtml}
+                </div>
+                <button type="button" class="file-remove" data-filename="${filename}">&times;</button>
+                ${data.error ? `<div class="file-error">${data.error}</div>` : ''}
+            `;
+
+            fileList.appendChild(item);
+        }
+
+        // Add remove button handlers
+        fileList.querySelectorAll('.file-remove').forEach(btn => {
+            btn.addEventListener('click', () => {
+                uploadedFiles.delete(btn.dataset.filename);
+                if (uploadedFiles.size > 0) {
+                    detectFileTypes();
+                } else {
+                    updateUI(false);
+                }
+            });
         });
+
+        // Update validation summary
+        validationSummary.style.display = uploadedFiles.size > 0 ? 'block' : 'none';
+
+        document.getElementById('val-time-icon').innerHTML = hasTime ? '&#10003;' : '&#9675;';
+        document.getElementById('val-time-icon').className = hasTime ? 'check-icon' : 'pending-icon';
+
+        document.getElementById('val-service-icon').innerHTML = hasService ? '&#10003;' : '&#9675;';
+        document.getElementById('val-service-icon').className = hasService ? 'check-icon' : 'pending-icon';
+
+        // Update drop zone state
+        dropZone.classList.remove('has-files', 'has-error');
+        if (uploadedFiles.size > 0) {
+            if (hasError) {
+                dropZone.classList.add('has-error');
+            } else if (hasTime && hasService) {
+                dropZone.classList.add('has-files');
+            }
+        }
+
+        // Enable submit only when valid
+        submitBtn.disabled = !isValid;
+
+        // Update hidden input with files
+        updateFormFiles();
     }
 
-    function updateFileDisplay(zone, fileNameEl, name) {
-        zone.classList.add('has-file');
-        document.getElementById(fileNameEl).textContent = name;
+    function updateFormFiles() {
+        // Create a new DataTransfer to update the file input
+        const dt = new DataTransfer();
+        for (const [filename, data] of uploadedFiles) {
+            dt.items.add(data.file);
+        }
+        fileInput.files = dt.files;
     }
-
-    setupDropZone(timeZone, timeInput, 'time-file-name');
-    setupDropZone(serviceZone, serviceInput, 'service-file-name');
 </script>
 {% endblock %}

@@ -21,7 +21,7 @@
 {% if is_connected %}
     <p>You're connected to QuickBooks Online. Ready to process invoices!</p>
     <div class="mt-20">
-        <a href="{{ url_for('upload') }}" class="btn btn-success">Upload CSV Files</a>
+        <a href="{{ url_for('upload') }}" class="btn btn-success">Upload Files</a>
         <a href="{{ url_for('qbo_disconnect') }}" class="btn btn-secondary" style="margin-left: 10px;">Disconnect</a>
     </div>
 {% else %}
@@ -34,9 +34,12 @@
 <h2 class="mt-20">How It Works</h2>
 <ol>
     <li><strong>Connect</strong> - Authorize access to your QuickBooks Online account</li>
-    <li><strong>Upload</strong> - Upload your LMN Time Data and Service Data CSV exports</li>
+    <li><strong>Upload</strong> - Upload your LMN Time Data and Service Data exports (.xlsx or .csv)</li>
     <li><strong>Map</strong> - Match any new jobsites to QuickBooks customers</li>
     <li><strong>Review</strong> - Preview invoices before creating them</li>
     <li><strong>Create</strong> - Create draft invoices in QuickBooks for final review</li>
 </ol>
+<p class="mt-20">
+    <a href="https://docs.google.com/document/d/1J_hYbSsxYORKLG77RrbUNZY6MmxMTLKOCaqxqx5VHog/edit?usp=sharing" target="_blank">View detailed instructions</a>
+</p>
 {% endblock %}

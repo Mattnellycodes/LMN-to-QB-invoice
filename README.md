@@ -4,12 +4,12 @@ Automates the creation of QuickBooks Online draft invoices from LMN (landscaping
 
 ## What It Does
 
-Takes two CSV exports from LMN and creates draft invoices in QuickBooks Online:
+Takes two exports from LMN (CSV or Excel) and creates draft invoices in QuickBooks Online:
 
 ```
-LMN Time Data CSV  ─┐
-                    ├──►  Python Script  ──►  QBO Draft Invoices
-LMN Service Data CSV┘
+LMN Time Data (.csv, .xlsx, .xls)  ─┐
+                                      ├──►  Python Script  ──►  QBO Draft Invoices
+LMN Service Data (.csv, .xlsx, .xls)┘
 ```
 
 Each invoice includes:
@@ -32,6 +32,8 @@ python -m src.main --preview \
   --time-data path/to/time_data.csv \
   --service-data path/to/service_data.csv
 ```
+
+Note: The web interface is now the recommended way to upload and process files. It supports CSV, .xlsx, and .xls files with automatic detection.
 
 ### 3. Set Up QuickBooks Connection
 
@@ -100,7 +102,22 @@ Tokens are automatically stored in PostgreSQL on Render:
 
 Tokens are now stored securely in the PostgreSQL database instead of environment variables. See [docs/QB_OAuth.md](docs/QB_OAuth.md) for full details.
 
-### 4. Set Up Customer Mapping
+### 4. Upload Files (Web Interface)
+
+Once connected to QuickBooks, use the web interface to upload your LMN exports:
+
+1. **Go to Upload Page** - Click "Upload Files" from the home page
+2. **Drop or Browse Files** - Use the drag-and-drop zone to select your Time Data and Service Data files
+3. **Supported Formats** - The app accepts .csv, .xlsx, and .xls files
+4. **Auto-Detection** - Files are automatically detected based on filename and content:
+   - Files with "time" in the name → Time Data
+   - Files with "service" in the name → Service Data
+   - If filename is ambiguous, the app checks the file contents
+5. **Live Preview** - As you select files, the interface shows detection results with colored badges
+
+For detailed instructions, see the [Google Docs guide](https://docs.google.com/document/d/1J_hYbSsxYORKLG77RrbUNZY6MmxMTLKOCaqxqx5VHog/edit?usp=sharing).
+
+### 5. Set Up Customer Mapping
 
 Create a mapping between LMN JobsiteIDs and QBO CustomerIDs in `config/customer_mapping.csv`:
 
@@ -120,7 +137,15 @@ python -m src.mapping.build_mapping lmn-jobsites --input path/to/time_data.csv
 python -m src.mapping.build_mapping qbo-customers
 ```
 
-### 5. Create Invoices
+### 6. Review and Create Invoices
+
+After uploading and mapping jobsites (if needed):
+
+1. **Review** - The app shows a preview of all draft invoices
+2. **Adjust Mapping** - Map any new jobsites to QuickBooks customers
+3. **Create** - Click "Create Invoices" to create draft invoices in QuickBooks
+
+If using the CLI instead of the web interface:
 
 ```bash
 # Dry run (shows what would be created)
@@ -152,17 +177,23 @@ Optional:
 
 ## LMN Export Requirements
 
+The app accepts exports in **CSV, .xlsx, or .xls formats**. Files are auto-detected based on filename and content.
+
 ### Time Data Export (Job History Time Data)
 
 Required columns:
 - `TimesheetID`, `JobsiteID`, `Jobsite`, `CustomerName`
 - `TaskName`, `CostCode`, `Man Hours`, `Billable Rate`, `EndDate`
 
+File naming: Include "time" in the filename for best detection (e.g., `time_data.csv`, `TimeData.xlsx`)
+
 ### Service Data Export (Job History Service Data)
 
 Required columns:
 - `TimesheetID`, `JobsiteID`, `Service_Activity`
-- `Timesheet Qty`, `Invoice Type`, `Unit Price`, `Total Price`, `Invoiced`
+- `Timesheet Qty`, `Invoice Type`, `Unit Price`, `Total Price`, `Invoiced`, `EndDate`
+
+File naming: Include "service" in the filename for best detection (e.g., `service_data.csv`, `ServiceData.xlsx`)
 
 ## Business Logic
 
@@ -232,12 +263,6 @@ python -m src.qbo.auth setup
 
 Note: `--preview` mode still triggers QBO searches during interactive mapping. Workaround: skip mapping with 's' or pre-populate `config/customer_mapping.csv` manually.
 
-### Disconnect from QuickBooks doesn't clear tokens
-
-**TODO:** The disconnect functionality in the web UI does not properly wipe the stored tokens. Manual workaround:
-```bash
-python -m src.qbo.auth clear
-```
 
 ### "No stored tokens found"
 

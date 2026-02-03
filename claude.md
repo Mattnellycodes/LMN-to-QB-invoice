@@ -55,9 +55,15 @@ Use type hints for function signatures
 Dependencies
 
 pandas - CSV parsing and data manipulation
-openpyxl - Excel output for staging/review
-quickbooks-python-sdk or intuit-oauth - QBO API integration
-python-dotenv - Credential management
+openpyxl - Excel file reading/writing (.xlsx, .xls support)
+intuit-oauth - QBO API OAuth2 authentication
+requests - HTTP requests for API calls
+flask - Web application framework
+gunicorn - Production WSGI server
+psycopg2-binary - PostgreSQL database connection
+python-dotenv - Environment variable management
+pytest - Testing framework
+ruff - Code linting and formatting
 
 Keep dependencies minimal. Document why each is needed.
 Code Style
@@ -70,19 +76,30 @@ Boolean variables should read as questions: is_billable, has_materials
 
 File Organization
 src/
-    parsing/        # LMN CSV parsing and validation
-    calculations/   # Time calculations, drive time allocation
-    invoice/        # Invoice line item building, fee calculation
-    qbo/            # QuickBooks Online API integration
-    mapping/        # Customer matching (JobsiteID → QBO CustomerID)
+    parsing/              # LMN CSV/Excel parsing and validation (supports .csv, .xlsx, .xls)
+    calculations/         # Time calculations, drive time allocation
+    invoice/              # Invoice line item building, fee calculation
+    qbo/                  # QuickBooks Online API integration
+    mapping/              # Customer matching (JobsiteID → QBO CustomerID)
+    web_processing.py     # High-level functions for web interface (file upload/detection)
+    main.py               # CLI entry point
+app.py                    # Flask web application
 config/
     customer_mapping.csv   # JobsiteID to QBO customer mapping
+templates/
+    base.html             # Base template with styling
+    index.html            # Home/connection status
+    upload.html           # File upload with drag-and-drop and live detection
+    mapping.html          # Customer mapping UI
+    results.html          # Invoice preview
+    invoice_results.html  # Invoice creation results
 tests/
-    # Mirror src/ structure
+    # Mirror src/ structure, includes Excel fixtures
 docs/
     IMPLEMENTATION_PLAN.md
-    QB_OAuth.md         # QuickBooks OAuth requirements and implementation
-    sample_data/        # Example LMN exports and QBO invoice PDFs
+    QB_OAuth.md           # QuickBooks OAuth requirements and implementation
+    LMN_API.md            # LMN API integration for customer mapping
+    sample_data/          # Example LMN exports and QBO invoice PDFs
 Imports
 
 Group imports: standard library, third-party, local
@@ -111,6 +128,10 @@ Test edge cases: overnight shifts, missing drive time, zero-dollar items
 Use sample data from docs/sample_data/
 
 Common Commands
+
+# Start web application
+python app.py
+
 # Run tests
 pytest
 
@@ -120,11 +141,15 @@ ruff check .
 # Format code
 ruff format .
 
-# Preview invoices (no QBO connection)
+# CLI: Preview invoices (no QBO connection)
 python -m src.main --preview --time-data data/time.csv --service-data data/service.csv
 
-# Create draft invoices in QBO
+# CLI: Create draft invoices in QBO
 python -m src.main --time-data data/time.csv --service-data data/service.csv
+
+# Web: File detection works with .csv, .xlsx, and .xls files
+# Filename-based detection: include 'time' or 'service' keywords
+# Fallback: Column-based detection if filename is ambiguous
 Environment Setup
 Create a .env file (never commit this):
 QBO_CLIENT_ID=your_client_id
@@ -134,6 +159,7 @@ QBO_ENVIRONMENT=sandbox  # Use "sandbox" for dev/test, "production" for real com
 
 For production (Render):
 DATABASE_URL=postgresql://...  (auto-set when you link a PostgreSQL database)
+LMN_API_TOKEN=your_lmn_bearer_token  # For automatic customer mapping from LMN API
 Tokens are stored in the database automatically after running `python -m src.qbo.auth setup`
 Legacy: Token env vars (QBO_ACCESS_TOKEN, QBO_REFRESH_TOKEN, etc.) still supported but deprecated
 
@@ -147,8 +173,4 @@ python -m src.qbo.auth refresh  # Manually refresh access token
 python -m src.qbo.auth clear    # Clear stored tokens
 
 Known Issues
-- --preview mode triggers QBO API calls during interactive customer mapping
-  - Should skip QBO searches when in preview mode
-  - Workaround: skip mapping with 's' or pre-populate config/customer_mapping.csv
-- Disconnect from QuickBooks (web UI) does not clear stored tokens
-  - Workaround: run `python -m src.qbo.auth clear`
+- None currently tracked
