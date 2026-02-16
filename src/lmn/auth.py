@@ -53,8 +53,13 @@ def authenticate(username: str, password: str) -> tuple[str, datetime]:
         )
 
         if response.status_code != 200:
-            error_data = response.json() if response.content else {}
+            error_data = {}
+            try:
+                error_data = response.json() if response.content else {}
+            except Exception:
+                pass
             error_msg = error_data.get("error_description", error_data.get("error", "Unknown error"))
+            logger.error(f"LMN auth failed: status={response.status_code}, response={response.text[:500]}")
             raise LMNAuthError(f"Authentication failed: {error_msg}")
 
         token_data = response.json()

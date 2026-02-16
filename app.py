@@ -319,6 +319,8 @@ def lmn_connect():
     if not username or not password:
         return jsonify({"error": "Username and password are required"}), 400
 
+    logger.info(f"LMN connect attempt for user: {username}")
+
     try:
         # Test authentication first
         token, expires_at = authenticate(username, password)
@@ -328,6 +330,7 @@ def lmn_connect():
         save_lmn_credentials(username, password)
         save_lmn_token(token, expires_at)
 
+        logger.info(f"LMN connect successful for user: {username}")
         return jsonify({
             "success": True,
             "message": "Connected to LMN successfully",
@@ -335,6 +338,7 @@ def lmn_connect():
         })
 
     except LMNAuthError as e:
+        logger.warning(f"LMN auth failed for user {username}: {e}")
         return jsonify({"error": str(e)}), 401
     except Exception as e:
         logger.exception("Error connecting to LMN")
