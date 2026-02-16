@@ -83,4 +83,16 @@ def init_db() -> None:
             ON invoice_history (jobsite_id)
         """)
 
-    print("Database initialized: customer_mapping_overrides, invoice_history tables ready")
+        # LMN credentials table - stores username/password and cached token
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS lmn_credentials (
+                id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+                username TEXT NOT NULL,
+                password TEXT NOT NULL,
+                cached_token TEXT,
+                token_expires_at TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+    print("Database initialized: customer_mapping_overrides, invoice_history, lmn_credentials tables ready")

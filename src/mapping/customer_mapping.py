@@ -70,10 +70,14 @@ def load_mapping_from_lmn_api(
     Returns:
         {jobsite_id: CustomerMapping}
     """
-    from src.lmn.api import load_mapping_from_lmn_api as fetch_lmn_mappings
-
-    # Start with LMN API mappings
-    mappings = fetch_lmn_mappings()
+    # Start with LMN API mappings (if available)
+    mappings = {}
+    try:
+        from src.lmn.api import load_mapping_from_lmn_api as fetch_lmn_mappings
+        mappings = fetch_lmn_mappings()
+    except (ValueError, Exception):
+        # LMN API not configured or failed - continue with empty base mappings
+        pass
 
     # Apply overrides (database for production, CSV for local dev)
     if use_db_overrides:

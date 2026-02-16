@@ -5,6 +5,12 @@
 {% block content %}
 <h1>Invoice Preview</h1>
 
+{% if result.lmn_mapping_count %}
+<div class="flash success" style="margin-bottom: 15px;">
+    Loaded {{ result.lmn_mapping_count }} customer mappings from LMN
+</div>
+{% endif %}
+
 {% if result.skipped_jobsites %}
 <div class="flash warning">
     <strong>{{ result.skipped_jobsites|length }} jobsite(s) skipped</strong> - no QBO customer mapping

@@ -80,8 +80,9 @@ src/
     calculations/         # Time calculations, drive time allocation
     invoice/              # Invoice line item building, fee calculation
     qbo/                  # QuickBooks Online API integration
+    lmn/                  # LMN API integration (api.py, auth.py)
     mapping/              # Customer matching (JobsiteID → QBO CustomerID)
-    db/                   # Database operations (invoice history, customer overrides)
+    db/                   # Database operations (invoice history, customer overrides, LMN credentials)
     web_processing.py     # High-level functions for web interface (file upload/detection)
     main.py               # CLI entry point
 app.py                    # Flask web application
@@ -161,10 +162,17 @@ FLASK_SECRET_KEY=your_secret_key  # For Flask session security (auto-generated i
 
 For production (Render):
 DATABASE_URL=postgresql://...  (auto-set when you link a PostgreSQL database)
-LMN_API_TOKEN=your_lmn_bearer_token  # For automatic customer mapping from LMN API
 FLASK_SECRET_KEY=your_secret_key_for_production  # Required for persistent sessions
 Tokens are stored in the database automatically after running `python -m src.qbo.auth setup`
 Legacy: Token env vars (QBO_ACCESS_TOKEN, QBO_REFRESH_TOKEN, etc.) still supported but deprecated
+
+LMN Authentication
+The app supports automatic LMN authentication via OAuth2 (ROPC grant):
+- Enter LMN username/password on the home page to connect
+- Credentials are stored securely in the database
+- Access tokens are cached (~18 hour lifetime) and auto-refreshed
+- Falls back to LMN_API_TOKEN env var if no credentials stored
+- LMN auth endpoint: https://auth.golmn.com/connect/token
 
 Duplicate Detection
 When processing invoices, the system checks for already-invoiced timesheets in the database. If duplicates are found:

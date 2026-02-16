@@ -2,20 +2,29 @@
 
 from __future__ import annotations
 
-import os
+import logging
 from typing import Dict, List, Optional
 
 import requests
 
 from src.mapping.customer_mapping import CustomerMapping
 
+logger = logging.getLogger(__name__)
 
 LMN_API_URL = "https://accounting-api.golmn.com/qbdata/jobmatching"
 
 
 def get_lmn_token() -> Optional[str]:
-    """Get the LMN API bearer token from environment."""
-    return os.getenv("LMN_API_TOKEN")
+    """
+    Get a valid LMN API bearer token.
+
+    Uses the auth module to get a token from:
+    1. Cached token from database
+    2. Re-authentication with stored credentials
+    3. LMN_API_TOKEN environment variable (fallback)
+    """
+    from src.lmn.auth import get_valid_token
+    return get_valid_token()
 
 
 def get_job_matching() -> List[Dict]:

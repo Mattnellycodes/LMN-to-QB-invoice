@@ -101,16 +101,40 @@ def health():
 
 @app.route("/")
 def index():
-    """Landing page with QuickBooks connection status."""
+    """Landing page with QuickBooks and LMN connection status."""
     from src.qbo.context import has_qbo_credentials
 
     is_connected = has_qbo_credentials()
     realm_id = session.get("qbo_tokens", {}).get("realm_id") if is_connected else None
 
+    # Check LMN status
+    lmn_connected = False
+    lmn_using_env = False
+    try:
+        from src.db.lmn_credentials import has_lmn_credentials
+        from src.lmn.auth import get_valid_token
+
+        if has_lmn_credentials():
+            token = get_valid_token()
+            lmn_connected = token is not None
+        else:
+            import os
+            if os.getenv("LMN_API_TOKEN"):
+                lmn_connected = True
+                lmn_using_env = True
+    except Exception:
+        # Database not available - check env var
+        import os
+        if os.getenv("LMN_API_TOKEN"):
+            lmn_connected = True
+            lmn_using_env = True
+
     return render_template(
         "index.html",
         is_connected=is_connected,
         realm_id=realm_id,
+        lmn_connected=lmn_connected,
+        lmn_using_env=lmn_using_env,
     )
 
 
@@ -215,6 +239,137 @@ def auth_status():
     status["has_request_credentials"] = has_qbo_credentials()
 
     return jsonify(status)
+
+
+# =============================================================================
+# LMN Authentication
+# =============================================================================
+
+
+@app.route("/lmn/status")
+def lmn_status():
+    """Check LMN connection status (JSON endpoint)."""
+    from src.lmn.auth import get_valid_token
+
+    try:
+        from src.db.lmn_credentials import has_lmn_credentials, get_cached_token
+
+        has_credentials = has_lmn_credentials()
+        cached_token = get_cached_token()
+
+        # If we have a cached token, we're connected
+        if cached_token:
+            return jsonify({
+                "connected": True,
+                "has_credentials": True,
+                "token_cached": True,
+            })
+
+        # If we have credentials but no cached token, try to get one
+        if has_credentials:
+            token = get_valid_token()
+            return jsonify({
+                "connected": token is not None,
+                "has_credentials": True,
+                "token_cached": token is not None,
+            })
+
+        # Check for env var fallback
+        import os
+        env_token = os.getenv("LMN_API_TOKEN")
+        if env_token:
+            return jsonify({
+                "connected": True,
+                "has_credentials": False,
+                "token_cached": False,
+                "using_env_var": True,
+            })
+
+        return jsonify({
+            "connected": False,
+            "has_credentials": False,
+            "token_cached": False,
+        })
+
+    except Exception as e:
+        # Database not available
+        import os
+        env_token = os.getenv("LMN_API_TOKEN")
+        return jsonify({
+            "connected": env_token is not None,
+            "has_credentials": False,
+            "token_cached": False,
+            "using_env_var": env_token is not None,
+            "db_error": str(e),
+        })
+
+
+@app.route("/lmn/connect", methods=["POST"])
+def lmn_connect():
+    """Save LMN credentials and test authentication."""
+    from src.lmn.auth import authenticate, LMNAuthError
+
+    data = request.json
+    if not data:
+        return jsonify({"error": "Request must be JSON"}), 400
+
+    username = data.get("username", "").strip()
+    password = data.get("password", "")
+
+    if not username or not password:
+        return jsonify({"error": "Username and password are required"}), 400
+
+    try:
+        # Test authentication first
+        token, expires_at = authenticate(username, password)
+
+        # Save credentials and token to database
+        from src.db.lmn_credentials import save_lmn_credentials, save_lmn_token
+        save_lmn_credentials(username, password)
+        save_lmn_token(token, expires_at)
+
+        return jsonify({
+            "success": True,
+            "message": "Connected to LMN successfully",
+            "expires_at": expires_at.isoformat(),
+        })
+
+    except LMNAuthError as e:
+        return jsonify({"error": str(e)}), 401
+    except Exception as e:
+        logger.exception("Error connecting to LMN")
+        return jsonify({"error": f"Failed to save credentials: {e}"}), 500
+
+
+@app.route("/lmn/disconnect", methods=["POST"])
+def lmn_disconnect():
+    """Delete stored LMN credentials."""
+    try:
+        from src.db.lmn_credentials import delete_lmn_credentials
+        delete_lmn_credentials()
+        return jsonify({"success": True, "message": "Disconnected from LMN"})
+    except Exception as e:
+        logger.exception("Error disconnecting from LMN")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/lmn/test", methods=["POST"])
+def lmn_test():
+    """Test LMN API access and return mapping count."""
+    from src.lmn.api import load_mapping_from_lmn_api
+
+    try:
+        mappings = load_mapping_from_lmn_api()
+        return jsonify({
+            "success": True,
+            "mapping_count": len(mappings),
+            "message": f"Successfully loaded {len(mappings)} customer mappings from LMN",
+        })
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 401
+    except Exception as e:
+        logger.exception("Error testing LMN API")
+        return jsonify({"error": str(e)}), 500
 
 
 # =============================================================================
@@ -436,6 +591,9 @@ def results():
     duplicates = result.get("duplicates", [])
     duplicate_jobsite_ids = list(set(d["jobsite_id"] for d in duplicates))
 
+    # Check LMN status for display
+    lmn_mapping_count = result.get("lmn_mapping_count", 0)
+
     # Build display result with only mapped invoices
     display_result = {
         "invoices": mapped_invoices,
@@ -443,6 +601,7 @@ def results():
         "duplicates": duplicates,
         "duplicate_jobsite_ids": duplicate_jobsite_ids,
         "total_amount": sum(inv["total"] for inv in mapped_invoices),
+        "lmn_mapping_count": lmn_mapping_count,
         "summary": {
             "total_jobsites": len(all_invoices),
             "mapped_jobsites": len(mapped_invoices),

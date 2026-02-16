@@ -48,6 +48,7 @@ Required environment variables:
 QBO_CLIENT_ID=your_client_id
 QBO_CLIENT_SECRET=your_client_secret
 QBO_REDIRECT_URI=https://lmn-to-qb-invoice.onrender.com/qbo/callback
+LMN_API_TOKEN=your_lmn_api_token  # Optional - credentials can be stored via web UI instead
 ```
 
 #### OAuth Authentication
@@ -117,7 +118,24 @@ Once connected to QuickBooks, use the web interface to upload your LMN exports:
 
 For detailed instructions, see the [Google Docs guide](https://docs.google.com/document/d/1J_hYbSsxYORKLG77RrbUNZY6MmxMTLKOCaqxqx5VHog/edit?usp=sharing).
 
-### 5. Set Up Customer Mapping
+### 5. Connect to LMN (Optional)
+
+The app can automatically load customer mappings from the LMN API. To enable automatic mapping:
+
+1. **On the Home Page** - Navigate to the "LMN Connection" section
+2. **Enter Credentials** - Provide your LMN username and password
+3. **Automatic Storage** - Credentials are securely stored in the database
+4. **Token Caching** - Access tokens are cached and automatically refreshed (~18 hour lifetime)
+
+**Environment Variable Fallback**
+If you prefer not to enter credentials through the web interface, you can set the environment variable:
+```bash
+LMN_API_TOKEN=your_lmn_api_token
+```
+
+The app checks for stored credentials first, then falls back to the environment variable.
+
+### 6. Set Up Customer Mapping
 
 Create a mapping between LMN JobsiteIDs and QBO CustomerIDs in `config/customer_mapping.csv`:
 
@@ -137,7 +155,7 @@ python -m src.mapping.build_mapping lmn-jobsites --input path/to/time_data.csv
 python -m src.mapping.build_mapping qbo-customers
 ```
 
-### 6. Review and Create Invoices
+### 7. Review and Create Invoices
 
 After uploading and mapping jobsites (if needed):
 

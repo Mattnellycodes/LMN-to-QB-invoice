@@ -31,6 +31,66 @@
     </div>
 {% endif %}
 
+<h2 class="mt-20">LMN Connection</h2>
+
+<div class="mb-20" id="lmn-status">
+    {% if lmn_connected %}
+        <span class="status-badge status-connected">Connected</span>
+        {% if lmn_using_env %}
+            <span class="text-muted" style="margin-left: 10px;">(using environment variable)</span>
+        {% endif %}
+    {% else %}
+        <span class="status-badge status-disconnected">Not Connected</span>
+    {% endif %}
+</div>
+
+<div id="lmn-section">
+    {% if lmn_connected and not lmn_using_env %}
+        <p>LMN is connected. Customer mappings will be loaded automatically.</p>
+        <div class="mt-20">
+            <button type="button" class="btn btn-secondary" onclick="testLmnConnection()">Test Connection</button>
+            <button type="button" class="btn btn-secondary" style="margin-left: 10px;" onclick="disconnectLmn()">Disconnect</button>
+        </div>
+        <div id="lmn-test-result" class="mt-20" style="display: none;"></div>
+    {% elif lmn_using_env %}
+        <p>Using LMN token from environment variable. To use automatic authentication, enter your LMN credentials below.</p>
+        <div id="lmn-connect-form" class="mt-20">
+            <form onsubmit="connectLmn(event)">
+                <div class="form-group">
+                    <label for="lmn-username">LMN Username (email)</label>
+                    <input type="email" id="lmn-username" name="username" required style="width: 300px; padding: 8px;">
+                </div>
+                <div class="form-group" style="margin-top: 10px;">
+                    <label for="lmn-password">LMN Password</label>
+                    <input type="password" id="lmn-password" name="password" required style="width: 300px; padding: 8px;">
+                </div>
+                <div class="mt-20">
+                    <button type="submit" class="btn">Connect to LMN</button>
+                </div>
+            </form>
+        </div>
+        <div id="lmn-connect-result" class="mt-20" style="display: none;"></div>
+    {% else %}
+        <p>Connect to LMN to automatically load customer mappings.</p>
+        <div id="lmn-connect-form" class="mt-20">
+            <form onsubmit="connectLmn(event)">
+                <div class="form-group">
+                    <label for="lmn-username">LMN Username (email)</label>
+                    <input type="email" id="lmn-username" name="username" required style="width: 300px; padding: 8px;">
+                </div>
+                <div class="form-group" style="margin-top: 10px;">
+                    <label for="lmn-password">LMN Password</label>
+                    <input type="password" id="lmn-password" name="password" required style="width: 300px; padding: 8px;">
+                </div>
+                <div class="mt-20">
+                    <button type="submit" class="btn">Connect to LMN</button>
+                </div>
+            </form>
+        </div>
+        <div id="lmn-connect-result" class="mt-20" style="display: none;"></div>
+    {% endif %}
+</div>
+
 <h2 class="mt-20">How It Works</h2>
 <ol>
     <li><strong>Connect</strong> - Authorize access to your QuickBooks Online account</li>
@@ -42,4 +102,92 @@
 <p class="mt-20">
     <a href="https://docs.google.com/document/d/1J_hYbSsxYORKLG77RrbUNZY6MmxMTLKOCaqxqx5VHog/edit?usp=sharing" target="_blank">View detailed instructions</a>
 </p>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function connectLmn(event) {
+    event.preventDefault();
+
+    const username = document.getElementById('lmn-username').value;
+    const password = document.getElementById('lmn-password').value;
+    const resultDiv = document.getElementById('lmn-connect-result');
+
+    resultDiv.style.display = 'block';
+    resultDiv.className = 'flash info';
+    resultDiv.textContent = 'Connecting to LMN...';
+
+    try {
+        const response = await fetch('/lmn/connect', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({username, password})
+        });
+
+        const data = await response.json();
+
+        if (response.ok && data.success) {
+            resultDiv.className = 'flash success';
+            resultDiv.textContent = data.message;
+            // Reload page to update status
+            setTimeout(() => window.location.reload(), 1500);
+        } else {
+            resultDiv.className = 'flash error';
+            resultDiv.textContent = data.error || 'Connection failed';
+        }
+    } catch (error) {
+        resultDiv.className = 'flash error';
+        resultDiv.textContent = 'Network error: ' + error.message;
+    }
+}
+
+async function disconnectLmn() {
+    if (!confirm('Disconnect from LMN?')) return;
+
+    try {
+        const response = await fetch('/lmn/disconnect', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'}
+        });
+
+        const data = await response.json();
+
+        if (response.ok && data.success) {
+            window.location.reload();
+        } else {
+            alert(data.error || 'Failed to disconnect');
+        }
+    } catch (error) {
+        alert('Network error: ' + error.message);
+    }
+}
+
+async function testLmnConnection() {
+    const resultDiv = document.getElementById('lmn-test-result');
+
+    resultDiv.style.display = 'block';
+    resultDiv.className = 'flash info';
+    resultDiv.textContent = 'Testing LMN connection...';
+
+    try {
+        const response = await fetch('/lmn/test', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'}
+        });
+
+        const data = await response.json();
+
+        if (response.ok && data.success) {
+            resultDiv.className = 'flash success';
+            resultDiv.textContent = data.message;
+        } else {
+            resultDiv.className = 'flash error';
+            resultDiv.textContent = data.error || 'Test failed';
+        }
+    } catch (error) {
+        resultDiv.className = 'flash error';
+        resultDiv.textContent = 'Network error: ' + error.message;
+    }
+}
+</script>
 {% endblock %}

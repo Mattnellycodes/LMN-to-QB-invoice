@@ -183,6 +183,7 @@ def process_uploaded_files(
 
     # Load customer mappings
     mappings = load_mapping_from_lmn_api()
+    lmn_mapping_count = len(mappings)
 
     # Find unmapped jobsites
     jobsite_ids = [inv.jobsite_id for inv in invoices]
@@ -218,6 +219,7 @@ def process_uploaded_files(
         "invoices": all_invoices,
         "unmapped_jobsites": unmapped_jobsites,
         "duplicates": duplicates,
+        "lmn_mapping_count": lmn_mapping_count,
         "total_amount": total_amount,
         "summary": {
             "total_jobsites": len(invoices),
