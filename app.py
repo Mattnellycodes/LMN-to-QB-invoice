@@ -38,6 +38,13 @@ if not _secret_key:
     _secret_key = secrets.token_hex(32)
 app.secret_key = _secret_key
 
+# Initialize database tables (idempotent - uses CREATE TABLE IF NOT EXISTS)
+try:
+    from src.db.connection import init_db
+    init_db()
+except Exception as e:
+    logger.warning(f"Database initialization skipped: {e}")
+
 
 # =============================================================================
 # Request Hooks - Load QBO credentials into request context
