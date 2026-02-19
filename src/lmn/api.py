@@ -50,7 +50,8 @@ def get_job_matching() -> List[Dict]:
     response = requests.get(LMN_API_URL, headers=headers, timeout=30)
     response.raise_for_status()
 
-    return response.json()
+    data = response.json()
+    return data.get("lmnitems", [])
 
 
 def build_mapping_from_lmn(lmn_data: List[Dict]) -> Dict[str, CustomerMapping]:

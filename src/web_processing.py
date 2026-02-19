@@ -14,7 +14,6 @@ from src.invoice.line_items import build_all_invoices, InvoiceData, LineItem
 from src.mapping.customer_mapping import (
     CustomerMapping,
     find_unmapped_jobsites,
-    get_qbo_customer_id,
     load_mapping_from_lmn_api,
 )
 from src.db.invoice_history import find_already_invoiced_timesheets
@@ -206,9 +205,10 @@ def process_uploaded_files(
     mapped_count = 0
     total_amount = 0.0
     for inv_dict in all_invoices:
-        qbo_customer_id = get_qbo_customer_id(inv_dict["jobsite_id"], mappings)
-        if qbo_customer_id:
-            inv_dict["qbo_customer_id"] = qbo_customer_id
+        mapping = mappings.get(str(inv_dict["jobsite_id"]))
+        if mapping:
+            inv_dict["qbo_customer_id"] = mapping.qbo_customer_id
+            inv_dict["qbo_display_name"] = mapping.qbo_display_name
             mapped_count += 1
             total_amount += inv_dict["total"]
 
@@ -296,9 +296,10 @@ def process_csv_files(
     mapped_count = 0
     total_amount = 0.0
     for inv_dict in all_invoices:
-        qbo_customer_id = get_qbo_customer_id(inv_dict["jobsite_id"], mappings)
-        if qbo_customer_id:
-            inv_dict["qbo_customer_id"] = qbo_customer_id
+        mapping = mappings.get(str(inv_dict["jobsite_id"]))
+        if mapping:
+            inv_dict["qbo_customer_id"] = mapping.qbo_customer_id
+            inv_dict["qbo_display_name"] = mapping.qbo_display_name
             mapped_count += 1
             total_amount += inv_dict["total"]
 

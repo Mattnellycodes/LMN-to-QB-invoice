@@ -12,9 +12,7 @@ import requests
 logger = logging.getLogger(__name__)
 
 # LMN OAuth2 configuration
-LMN_AUTH_URL = "https://auth.golmn.com/connect/token"
-LMN_CLIENT_ID = "lmn.estimating"
-LMN_SCOPES = "openid profile email time estimating"
+LMN_AUTH_URL = "https://accounting-api.golmn.com/token"
 
 
 class LMNAuthError(Exception):
@@ -38,10 +36,8 @@ def authenticate(username: str, password: str) -> tuple[str, datetime]:
     """
     data = {
         "grant_type": "password",
-        "client_id": LMN_CLIENT_ID,
         "username": username,
         "password": password,
-        "scope": LMN_SCOPES,
     }
 
     try:
