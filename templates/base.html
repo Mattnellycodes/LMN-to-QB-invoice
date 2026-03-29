@@ -141,6 +141,66 @@
         .mb-20 {
             margin-bottom: 20px;
         }
+        .type-cards {
+            display: flex;
+            gap: 20px;
+            margin-top: 10px;
+        }
+        .type-card-form {
+            flex: 1;
+        }
+        .type-card {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            padding: 30px 20px;
+            border: 2px solid #ddd;
+            border-radius: 12px;
+            background: white;
+            cursor: pointer;
+            transition: border-color 0.2s, box-shadow 0.2s, transform 0.1s;
+            font-family: inherit;
+        }
+        .type-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        .type-card-maintenance {
+            border-color: #27ae60;
+        }
+        .type-card-maintenance:hover {
+            background: #f0faf4;
+            box-shadow: 0 4px 12px rgba(39,174,96,0.2);
+        }
+        .type-card-irrigation {
+            border-color: #3498db;
+        }
+        .type-card-irrigation:hover {
+            background: #f0f7fd;
+            box-shadow: 0 4px 12px rgba(52,152,219,0.2);
+        }
+        .type-card-active {
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            transform: translateY(-2px);
+        }
+        .type-card-active.type-card-maintenance {
+            background: #d4edda;
+        }
+        .type-card-active.type-card-irrigation {
+            background: #d1ecf1;
+        }
+        .type-card-title {
+            font-size: 22px;
+            font-weight: 600;
+            color: #2c3e50;
+            margin-bottom: 6px;
+        }
+        .type-card-desc {
+            font-size: 14px;
+            color: #6c757d;
+        }
     </style>
     {% block head %}{% endblock %}
 </head>

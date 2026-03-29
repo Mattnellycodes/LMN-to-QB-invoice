@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
 from datetime import datetime
 from io import BytesIO, StringIO
 from typing import Any, Dict, List, Tuple
@@ -10,9 +9,12 @@ from typing import Any, Dict, List, Tuple
 import pandas as pd
 
 from src.calculations.time_calc import calculate_billable_hours
-from src.invoice.line_items import build_all_invoices, InvoiceData, LineItem
+from src.invoice.line_items import (
+    build_all_invoices,
+    extract_zero_price_items,
+    InvoiceData,
+)
 from src.mapping.customer_mapping import (
-    CustomerMapping,
     find_unmapped_jobsites,
     get_qbo_customer_id,
     load_mapping_from_lmn_api,
@@ -181,6 +183,20 @@ def process_uploaded_files(
     invoice_date = datetime.now().strftime("%Y-%m-%d")
     invoices = build_all_invoices(jobsite_hours_list, service_df, invoice_date)
 
+    # Collect zero-price items (parallel path from raw service data)
+    invoice_jobsite_ids = {inv.jobsite_id for inv in invoices}
+    zero_price_items = []
+    invoice_by_jobsite = {inv.jobsite_id: inv for inv in invoices}
+    for jobsite_id in invoice_jobsite_ids:
+        inv = invoice_by_jobsite[jobsite_id]
+        items = extract_zero_price_items(service_df, jobsite_id)
+        for item in items:
+            item["jobsite_id"] = str(jobsite_id)
+            item["jobsite_name"] = str(inv.jobsite_name)
+            item["customer_name"] = str(inv.customer_name)
+            item["index"] = len(zero_price_items)
+            zero_price_items.append(item)
+
     # Load customer mappings
     mappings = load_mapping_from_lmn_api()
     lmn_mapping_count = len(mappings)
@@ -219,6 +235,7 @@ def process_uploaded_files(
         "invoices": all_invoices,
         "unmapped_jobsites": unmapped_jobsites,
         "duplicates": duplicates,
+        "zero_price_items": zero_price_items,
         "lmn_mapping_count": lmn_mapping_count,
         "total_amount": total_amount,
         "summary": {
@@ -398,7 +415,7 @@ def create_qbo_invoices(invoices: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     Returns:
         List of result dicts with success status and invoice details
     """
-    from src.qbo.invoices import create_draft_invoice, get_labor_item_ref, InvoiceResult
+    from src.qbo.invoices import create_draft_invoice, get_labor_item_ref
     from src.invoice.line_items import InvoiceData, LineItem
 
     # Get the labor item reference for line items

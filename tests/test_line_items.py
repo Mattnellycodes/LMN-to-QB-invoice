@@ -10,8 +10,6 @@ from src.invoice.line_items import (
     extract_service_line_items,
     build_invoice,
     build_all_invoices,
-    LineItem,
-    InvoiceData,
 )
 from src.calculations.time_calc import JobsiteHours
 
@@ -139,8 +137,8 @@ class TestExtractServiceLineItems:
         assert items[0].rate == 45.0
         assert items[0].amount == 225.0
 
-    def test_excludes_included_invoice_type(self, sample_service_df):
-        """Excludes items with Invoice Type = 'Included'."""
+    def test_excludes_zero_total_price_items(self, sample_service_df):
+        """Excludes items with Total Price = 0."""
         items = extract_service_line_items(sample_service_df, "JS001")
 
         descriptions = [item.description for item in items]

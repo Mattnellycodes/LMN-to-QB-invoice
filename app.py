@@ -11,7 +11,6 @@ from functools import wraps
 from flask import (
     Flask,
     flash,
-    g,
     jsonify,
     redirect,
     render_template,
@@ -24,6 +23,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import logging
+
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
@@ -63,23 +63,31 @@ def load_qbo_credentials():
         except (InvalidGrant, RefreshTokenExpired):
             # Token invalid/expired - clear and require re-auth
             session.pop("qbo_tokens", None)
-        except Exception as e:
+        except Exception:
             # Log the error so we can debug - this was causing silent failures
             logger.exception("Error loading QBO credentials from session")
 
 
 def require_qbo_auth(f):
     """Decorator to require QBO authentication for a route."""
+
     @wraps(f)
     def decorated_function(*args, **kwargs):
         from src.qbo.context import has_qbo_credentials
+
         if not has_qbo_credentials():
             # Return JSON error for AJAX requests
-            if request.is_json or request.headers.get('X-Requested-With') == 'XMLHttpRequest':
-                return jsonify({"error": "Not connected to QuickBooks. Please reconnect."}), 401
+            if (
+                request.is_json
+                or request.headers.get("X-Requested-With") == "XMLHttpRequest"
+            ):
+                return jsonify(
+                    {"error": "Not connected to QuickBooks. Please reconnect."}
+                ), 401
             flash("Please connect to QuickBooks first.", "warning")
             return redirect(url_for("index"))
         return f(*args, **kwargs)
+
     return decorated_function
 
 
@@ -101,40 +109,18 @@ def health():
 
 @app.route("/")
 def index():
-    """Landing page with QuickBooks and LMN connection status."""
+    """Landing page with QuickBooks connection and invoice type selection."""
     from src.qbo.context import has_qbo_credentials
 
     is_connected = has_qbo_credentials()
     realm_id = session.get("qbo_tokens", {}).get("realm_id") if is_connected else None
-
-    # Check LMN status
-    lmn_connected = False
-    lmn_using_env = False
-    try:
-        from src.db.lmn_credentials import has_lmn_credentials
-        from src.lmn.auth import get_valid_token
-
-        if has_lmn_credentials():
-            token = get_valid_token()
-            lmn_connected = token is not None
-        else:
-            import os
-            if os.getenv("LMN_API_TOKEN"):
-                lmn_connected = True
-                lmn_using_env = True
-    except Exception:
-        # Database not available - check env var
-        import os
-        if os.getenv("LMN_API_TOKEN"):
-            lmn_connected = True
-            lmn_using_env = True
+    invoice_type = session.get("invoice_type")
 
     return render_template(
         "index.html",
         is_connected=is_connected,
         realm_id=realm_id,
-        lmn_connected=lmn_connected,
-        lmn_using_env=lmn_using_env,
+        invoice_type=invoice_type,
     )
 
 
@@ -181,7 +167,10 @@ def qbo_callback():
     # Validate CSRF state
     expected_state = session.pop("oauth_state", None)
     if not expected_state or callback_state != expected_state:
-        flash("Invalid state parameter - possible security issue. Please try again.", "error")
+        flash(
+            "Invalid state parameter - possible security issue. Please try again.",
+            "error",
+        )
         return redirect(url_for("index"))
 
     try:
@@ -193,7 +182,9 @@ def qbo_callback():
         # Set in request context for immediate use
         set_qbo_credentials(tokens["access_token"], tokens["realm_id"])
 
-        flash(f"Successfully connected to QuickBooks! Company ID: {realm_id}", "success")
+        flash(
+            f"Successfully connected to QuickBooks! Company ID: {realm_id}", "success"
+        )
 
         return render_template(
             "oauth_success.html",
@@ -219,6 +210,7 @@ def qbo_disconnect():
     # Clear local token file (if exists)
     try:
         from src.qbo.auth import clear_stored_tokens
+
         clear_stored_tokens()
     except Exception:
         pass  # Ignore errors - file may not exist
@@ -242,138 +234,20 @@ def auth_status():
 
 
 # =============================================================================
-# LMN Authentication
+# Invoice Type Selection
 # =============================================================================
 
 
-@app.route("/lmn/status")
-def lmn_status():
-    """Check LMN connection status (JSON endpoint)."""
-    from src.lmn.auth import get_valid_token
+@app.route("/select-type", methods=["POST"])
+def select_type():
+    """Store the selected invoice type (maintenance/irrigation) in session."""
+    invoice_type = request.form.get("invoice_type")
+    if invoice_type not in ("maintenance", "irrigation"):
+        flash("Please select an invoice type.", "warning")
+        return redirect(url_for("index"))
 
-    try:
-        from src.db.lmn_credentials import has_lmn_credentials, get_cached_token
-
-        has_credentials = has_lmn_credentials()
-        cached_token = get_cached_token()
-
-        # If we have a cached token, we're connected
-        if cached_token:
-            return jsonify({
-                "connected": True,
-                "has_credentials": True,
-                "token_cached": True,
-            })
-
-        # If we have credentials but no cached token, try to get one
-        if has_credentials:
-            token = get_valid_token()
-            return jsonify({
-                "connected": token is not None,
-                "has_credentials": True,
-                "token_cached": token is not None,
-            })
-
-        # Check for env var fallback
-        import os
-        env_token = os.getenv("LMN_API_TOKEN")
-        if env_token:
-            return jsonify({
-                "connected": True,
-                "has_credentials": False,
-                "token_cached": False,
-                "using_env_var": True,
-            })
-
-        return jsonify({
-            "connected": False,
-            "has_credentials": False,
-            "token_cached": False,
-        })
-
-    except Exception as e:
-        # Database not available
-        import os
-        env_token = os.getenv("LMN_API_TOKEN")
-        return jsonify({
-            "connected": env_token is not None,
-            "has_credentials": False,
-            "token_cached": False,
-            "using_env_var": env_token is not None,
-            "db_error": str(e),
-        })
-
-
-@app.route("/lmn/connect", methods=["POST"])
-def lmn_connect():
-    """Save LMN credentials and test authentication."""
-    from src.lmn.auth import authenticate, LMNAuthError
-
-    data = request.json
-    if not data:
-        return jsonify({"error": "Request must be JSON"}), 400
-
-    username = data.get("username", "").strip()
-    password = data.get("password", "")
-
-    if not username or not password:
-        return jsonify({"error": "Username and password are required"}), 400
-
-    logger.info(f"LMN connect attempt for user: {username}")
-
-    try:
-        # Test authentication first
-        token, expires_at = authenticate(username, password)
-
-        # Save credentials and token to database
-        from src.db.lmn_credentials import save_lmn_credentials, save_lmn_token
-        save_lmn_credentials(username, password)
-        save_lmn_token(token, expires_at)
-
-        logger.info(f"LMN connect successful for user: {username}")
-        return jsonify({
-            "success": True,
-            "message": "Connected to LMN successfully",
-            "expires_at": expires_at.isoformat(),
-        })
-
-    except LMNAuthError as e:
-        logger.warning(f"LMN auth failed for user {username}: {e}")
-        return jsonify({"error": str(e)}), 401
-    except Exception as e:
-        logger.exception("Error connecting to LMN")
-        return jsonify({"error": f"Failed to save credentials: {e}"}), 500
-
-
-@app.route("/lmn/disconnect", methods=["POST"])
-def lmn_disconnect():
-    """Delete stored LMN credentials."""
-    try:
-        from src.db.lmn_credentials import delete_lmn_credentials
-        delete_lmn_credentials()
-        return jsonify({"success": True, "message": "Disconnected from LMN"})
-    except Exception as e:
-        logger.exception("Error disconnecting from LMN")
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/lmn/test", methods=["POST"])
-def lmn_test():
-    """Test LMN API access and return mapping count."""
-    from src.lmn.api import load_mapping_from_lmn_api
-
-    try:
-        mappings = load_mapping_from_lmn_api()
-        return jsonify({
-            "success": True,
-            "mapping_count": len(mappings),
-            "message": f"Successfully loaded {len(mappings)} customer mappings from LMN",
-        })
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 401
-    except Exception as e:
-        logger.exception("Error testing LMN API")
-        return jsonify({"error": str(e)}), 500
+    session["invoice_type"] = invoice_type
+    return redirect(url_for("upload"))
 
 
 # =============================================================================
@@ -393,7 +267,8 @@ def is_allowed_file(filename: str) -> bool:
 @require_qbo_auth
 def upload():
     """Page with drag-and-drop UI for uploading files."""
-    return render_template("upload.html")
+    invoice_type = session.get("invoice_type")
+    return render_template("upload.html", invoice_type=invoice_type)
 
 
 @app.route("/upload/detect", methods=["POST"])
@@ -415,11 +290,13 @@ def upload_detect():
             file_list.append((f.filename, content))
 
     if not file_list:
-        return jsonify({
-            "files": [],
-            "valid": False,
-            "error": "No valid files. Please upload .xlsx, .xls, or .csv files.",
-        })
+        return jsonify(
+            {
+                "files": [],
+                "valid": False,
+                "error": "No valid files. Please upload .xlsx, .xls, or .csv files.",
+            }
+        )
 
     result = detect_uploaded_files(file_list)
     return jsonify(result)
@@ -445,7 +322,10 @@ def upload_post():
             file_list.append((f.filename, content))
 
     if len(file_list) < 2:
-        flash("Please upload both Time Data and Service Data files (.xlsx, .xls, or .csv).", "error")
+        flash(
+            "Please upload both Time Data and Service Data files (.xlsx, .xls, or .csv).",
+            "error",
+        )
         return redirect(url_for("upload"))
 
     try:
@@ -506,12 +386,14 @@ def mapping_search():
 
     try:
         customers = search_customers_by_name(query)
-        return jsonify({
-            "customers": [
-                {"id": c.get("Id"), "name": c.get("DisplayName")}
-                for c in customers[:10]
-            ]
-        })
+        return jsonify(
+            {
+                "customers": [
+                    {"id": c.get("Id"), "name": c.get("DisplayName")}
+                    for c in customers[:10]
+                ]
+            }
+        )
     except Exception as e:
         logger.exception("Error searching QBO customers")
         return jsonify({"error": str(e)}), 500
@@ -545,7 +427,9 @@ def mapping_save():
 
         # Remove from unmapped list
         unmapped = result.get("unmapped_jobsites", [])
-        result["unmapped_jobsites"] = [j for j in unmapped if j["jobsite_id"] != jobsite_id]
+        result["unmapped_jobsites"] = [
+            j for j in unmapped if j["jobsite_id"] != jobsite_id
+        ]
 
         # Add qbo_customer_id and qbo_display_name to the invoice for this jobsite
         for inv in result.get("invoices", []):
@@ -598,12 +482,21 @@ def results():
     # Check LMN status for display
     lmn_mapping_count = result.get("lmn_mapping_count", 0)
 
+    # Filter zero-price items to only mapped invoices
+    mapped_jobsite_ids = {inv["jobsite_id"] for inv in mapped_invoices}
+    zero_price_items = [
+        item
+        for item in result.get("zero_price_items", [])
+        if item["jobsite_id"] in mapped_jobsite_ids
+    ]
+
     # Build display result with only mapped invoices
     display_result = {
         "invoices": mapped_invoices,
         "skipped_jobsites": result.get("skipped_jobsites", []),
         "duplicates": duplicates,
         "duplicate_jobsite_ids": duplicate_jobsite_ids,
+        "zero_price_items": zero_price_items,
         "total_amount": sum(inv["total"] for inv in mapped_invoices),
         "lmn_mapping_count": lmn_mapping_count,
         "summary": {
@@ -615,6 +508,85 @@ def results():
     }
 
     return render_template("results.html", result=display_result)
+
+
+@app.route("/update-zero-price-items", methods=["POST"])
+@require_qbo_auth
+def update_zero_price_items():
+    """Receive user-entered prices for zero-price items and update invoices."""
+    from src.invoice.line_items import calculate_direct_payment_fee
+
+    result = session.get("processing_result")
+    if not result:
+        flash("No data to display. Please upload files first.", "warning")
+        return redirect(url_for("upload"))
+
+    zero_price_items = result.get("zero_price_items", [])
+    if not zero_price_items:
+        return redirect(url_for("results"))
+
+    # Parse and validate submitted prices
+    new_line_items_by_jobsite = {}
+    for item in zero_price_items:
+        idx = item["index"]
+        rate_str = request.form.get(f"rate_{idx}", "").strip()
+        qty_str = request.form.get(f"quantity_{idx}", "").strip()
+        desc = request.form.get(f"description_{idx}", "").strip()
+
+        if not rate_str or float(rate_str) <= 0:
+            flash("All items must have a price greater than $0.", "error")
+            return redirect(url_for("results"))
+
+        rate = float(rate_str)
+        quantity = float(qty_str) if qty_str else item["quantity"]
+        description = desc or item["description"]
+        amount = round(rate * quantity, 2)
+
+        jobsite_id = item["jobsite_id"]
+        if jobsite_id not in new_line_items_by_jobsite:
+            new_line_items_by_jobsite[jobsite_id] = []
+        new_line_items_by_jobsite[jobsite_id].append(
+            {
+                "description": description,
+                "quantity": quantity,
+                "rate": rate,
+                "amount": amount,
+            }
+        )
+
+    # Update invoices in session
+    fee_description = "Please subtract if paying by USPS check"
+    for inv in result["invoices"]:
+        jobsite_id = inv["jobsite_id"]
+        if jobsite_id not in new_line_items_by_jobsite:
+            continue
+
+        # Strip existing fee line item
+        inv["line_items"] = [
+            li for li in inv["line_items"] if li["description"] != fee_description
+        ]
+
+        # Add user-priced items
+        inv["line_items"].extend(new_line_items_by_jobsite[jobsite_id])
+
+        # Recalculate totals
+        inv["subtotal"] = round(sum(li["amount"] for li in inv["line_items"]), 2)
+        inv["direct_payment_fee"] = calculate_direct_payment_fee(inv["subtotal"])
+        inv["line_items"].append(
+            {
+                "description": fee_description,
+                "quantity": 1,
+                "rate": inv["direct_payment_fee"],
+                "amount": inv["direct_payment_fee"],
+            }
+        )
+        inv["total"] = round(inv["subtotal"] + inv["direct_payment_fee"], 2)
+
+    # Clear zero-price items so modal doesn't reappear
+    result["zero_price_items"] = []
+    session["processing_result"] = result
+
+    return redirect(url_for("results"))
 
 
 @app.route("/create-invoices", methods=["POST"])
@@ -639,7 +611,8 @@ def create_invoices():
         duplicates = result.get("duplicates", [])
         duplicate_jobsite_ids = set(d["jobsite_id"] for d in duplicates)
         mapped_invoices = [
-            inv for inv in mapped_invoices
+            inv
+            for inv in mapped_invoices
             if inv["jobsite_id"] not in duplicate_jobsite_ids
         ]
         if not mapped_invoices:

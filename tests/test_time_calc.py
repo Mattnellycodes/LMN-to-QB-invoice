@@ -1,7 +1,6 @@
 """Tests for time calculation functions."""
 
 import pandas as pd
-import pytest
 
 from src.calculations.time_calc import (
     is_drive_time,
