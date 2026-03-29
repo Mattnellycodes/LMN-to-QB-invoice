@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import io
+import logging
 import os
 import secrets
 from datetime import datetime
 from functools import wraps
 
+from dotenv import load_dotenv
 from flask import (
     Flask,
     flash,
@@ -18,11 +20,8 @@ from flask import (
     session,
     url_for,
 )
-from dotenv import load_dotenv
 
 load_dotenv()
-
-import logging
 
 logger = logging.getLogger(__name__)
 
