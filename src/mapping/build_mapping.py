@@ -1,7 +1,6 @@
 """Utility script to help build the customer mapping file."""
 
 import argparse
-from pathlib import Path
 
 from src.parsing.lmn_parser import parse_time_data
 from src.qbo.customers import export_customers_for_mapping

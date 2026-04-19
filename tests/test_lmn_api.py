@@ -12,7 +12,7 @@ from src.lmn.api import (
 )
 
 
-# Sample items matching real LMN API lmnitems format
+# Sample lmnitems matching real API format
 SAMPLE_LMN_ITEMS = [
     {
         "JobsiteID": 67135,
@@ -39,12 +39,8 @@ SAMPLE_LMN_ITEMS = [
     },
 ]
 
-# Full API response wraps items in a dict
-SAMPLE_LMN_API_RESPONSE = {
-    "lmnitems": SAMPLE_LMN_ITEMS,
-    "qbitems": [],
-    "settings": {},
-}
+# Full API response wraps lmnitems in a dict
+SAMPLE_LMN_RESPONSE = {"lmnitems": SAMPLE_LMN_ITEMS}
 
 
 class TestGetLmnToken:
@@ -52,7 +48,8 @@ class TestGetLmnToken:
 
     def test_returns_token_when_set(self):
         """Token is returned when environment variable is set."""
-        with patch.dict("os.environ", {"LMN_API_TOKEN": "test_token_123"}):
+        env = {"LMN_API_TOKEN": "test_token_123"}
+        with patch.dict("os.environ", env, clear=True):
             assert get_lmn_token() == "test_token_123"
 
     def test_returns_none_when_not_set(self):
@@ -75,7 +72,7 @@ class TestGetJobMatching:
         mock_response = MagicMock()
         mock_response.json.return_value = SAMPLE_LMN_API_RESPONSE
 
-        with patch.dict("os.environ", {"LMN_API_TOKEN": "test_token"}):
+        with patch.dict("os.environ", {"LMN_API_TOKEN": "test_token"}, clear=True):
             with patch("src.lmn.api.requests.get", return_value=mock_response) as mock_get:
                 result = get_job_matching()
 
@@ -90,7 +87,7 @@ class TestGetJobMatching:
         mock_response = MagicMock()
         mock_response.raise_for_status.side_effect = Exception("401 Unauthorized")
 
-        with patch.dict("os.environ", {"LMN_API_TOKEN": "bad_token"}):
+        with patch.dict("os.environ", {"LMN_API_TOKEN": "bad_token"}, clear=True):
             with patch("src.lmn.api.requests.get", return_value=mock_response):
                 with pytest.raises(Exception):
                     get_job_matching()

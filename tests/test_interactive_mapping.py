@@ -1,6 +1,5 @@
 """Tests for interactive customer mapping functions."""
 
-import pytest
 from unittest.mock import patch
 
 from src.calculations.time_calc import JobsiteHours

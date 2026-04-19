@@ -1,8 +1,7 @@
 """Tests for customer mapping with LMN API integration."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
 
 from src.mapping.customer_mapping import (
     load_mapping_from_lmn_api,

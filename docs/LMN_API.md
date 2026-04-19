@@ -1,88 +1,101 @@
-# LMN API Investigation
+# LMN Accounting API
 
-## Endpoint Details
+## Endpoint
 
 **URL:** `https://accounting-api.golmn.com/qbdata/jobmatching`
 
+**Method:** GET
+
 **Server:** Microsoft-IIS/10.0 (ASP.NET)
-
-**Allowed Methods:** GET, POST
-
-**Content-Type:** application/json; charset=utf-8
 
 ## Authentication
 
-**Type:** Bearer Token (OAuth 2.0)
+**Token endpoint:** `POST https://accounting-api.golmn.com/token`
 
-The API returns HTTP 401 with header:
+Simple password grant with no client_id or scopes required:
+
 ```
-WWW-Authenticate: Bearer
+POST /token HTTP/1.1
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=password&username=<email>&password=<password>
 ```
 
-Unauthenticated requests receive:
-```json
-{"Message":"Authorization has been denied for this request."}
-```
-
-## Expected Response Format
-
-Based on the EXECUTOR_STATUS.md specification:
+**Token response:**
 ```json
 {
-  "lmnitems": [
-    {"lmnaccountid": "...", "accountingid": "..."}
-  ]
+  "access_token": "...",
+  "token_type": "bearer",
+  "expires_in": 35999,
+  "Username": "...",
+  "AccountID": "7473",
+  ...
 }
 ```
 
-This maps LMN account IDs (JobsiteID) to QuickBooks customer IDs.
+Tokens expire in ~10 hours. Use the access token as a Bearer token for API calls.
 
-## How to Obtain Bearer Token
+**Credential sources (priority order):**
+1. Cached token from database (if not expired)
+2. Re-authenticate with DB-stored credentials
+3. `LMN_EMAIL` + `LMN_PASSWORD` environment variables
+4. `LMN_API_TOKEN` environment variable (bare token, legacy)
 
-**No public API documentation exists.** The bearer token must be obtained through:
+## Response Format
 
-1. **LMN Account Portal** - Log into https://my.golmn.com and check for API settings or developer options
-2. **LMN Support** - Contact support@golmn.com or call (888) 347-9864 to request API access
-3. **Accounting Integration Settings** - Check https://accounting.golmn.com for integration configuration
+The `/qbdata/jobmatching` endpoint returns three keys:
 
-## Suggested Implementation
+```json
+{
+  "lmnitems": [...],
+  "qbitems": [...],
+  "settings": {...}
+}
+```
 
-Once bearer token is obtained, requests should be made as:
+### `lmnitems` (used for customer mapping)
+
+Array of LMN jobsite objects. Each item:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `JobsiteID` | int | LMN jobsite identifier (matches CSV export) |
+| `AccountingID` | string | QuickBooks customer ID |
+| `CustomerName` | string | Customer display name |
+| `JobName` | string | Job/property name |
+| `JobShortName` | string | Abbreviated job name |
+| `JobAddress` | string | Property address |
+| `CustomerAddress` | string | Customer billing address |
+| `isActive` | bool | Whether the jobsite is active |
+| `CreatedDate` | string | ISO datetime |
+| `LMNAccountID` | int | LMN account ID |
+| `ExternalID` | string | External reference ID |
+
+### `qbitems` (not used)
+
+Array of full QuickBooks customer objects. Available but not consumed by this app -- we query QBO directly via our own OAuth connection.
+
+### `settings` (not used)
+
+LMN's own QuickBooks connection settings. Not consumed by this app.
+
+## Example Request
 
 ```python
 import requests
 
-headers = {
-    "Authorization": f"Bearer {LMN_API_TOKEN}",
-    "Content-Type": "application/json"
-}
-
-response = requests.get(
-    "https://accounting-api.golmn.com/qbdata/jobmatching",
-    headers=headers
+# Authenticate
+token_resp = requests.post(
+    "https://accounting-api.golmn.com/token",
+    data="grant_type=password&username=<email>&password=<password>",
+    headers={"Content-Type": "application/x-www-form-urlencoded"},
 )
+token = token_resp.json()["access_token"]
+
+# Fetch job matching data
+resp = requests.get(
+    "https://accounting-api.golmn.com/qbdata/jobmatching",
+    headers={"Authorization": f"Bearer {token}"},
+)
+lmn_items = resp.json()["lmnitems"]
 ```
-
-## Environment Variables to Add
-
-Add to `.env`:
-```
-LMN_API_TOKEN=your_bearer_token_here
-```
-
-Add to `.env.example`:
-```
-# LMN API (for automatic customer mapping)
-LMN_API_TOKEN=your_lmn_api_bearer_token
-```
-
-## Next Steps
-
-1. User must obtain bearer token from LMN (via support or account settings)
-2. Once token is available, test connectivity with GET request
-3. Verify response format matches expected structure
-4. Implement LMN API client module in `src/lmn/`
-
-## Investigation Date
-
-2026-01-30

@@ -3,7 +3,6 @@
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 
 class TestRecordInvoiceCreation:
@@ -166,7 +165,7 @@ class TestGetInvoiceHistory:
         mock_db_cursor.return_value.__enter__ = MagicMock(return_value=mock_cursor)
         mock_db_cursor.return_value.__exit__ = MagicMock(return_value=False)
 
-        results = get_invoice_history(jobsite_id="J123")
+        get_invoice_history(jobsite_id="J123")
 
         mock_cursor.execute.assert_called_once()
         call_args = mock_cursor.execute.call_args
