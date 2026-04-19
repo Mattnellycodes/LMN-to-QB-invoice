@@ -91,15 +91,12 @@ def extract_service_line_items(
     """
     Extract billable service/material line items for a jobsite.
 
-    Filters to: Total Price > 0 AND Invoice Type != 'Included'
+    Filters to items with Total Price > 0.
     """
     jobsite_services = service_df[service_df["JobsiteID"] == jobsite_id]
 
     # Filter to billable items
-    billable = jobsite_services[
-        (jobsite_services["Total Price"] > 0)
-        & (jobsite_services["Invoice Type"].str.lower() != "included")
-    ]
+    billable = jobsite_services[jobsite_services["Total Price"] > 0]
 
     line_items = []
     for _, row in billable.iterrows():
@@ -113,6 +110,25 @@ def extract_service_line_items(
         )
 
     return line_items
+
+
+def extract_zero_price_items(
+    service_df: pd.DataFrame, jobsite_id: str
+) -> list[dict]:
+    """Extract service items with Unit Price = $0 that need user pricing."""
+    jobsite_services = service_df[service_df["JobsiteID"] == jobsite_id]
+    zero_price = jobsite_services[
+        (jobsite_services["Unit Price"] == 0)
+        & (jobsite_services["Timesheet Qty"] > 0)
+    ]
+    return [
+        {
+            "description": str(row["Service_Activity"]),
+            "quantity": float(row["Timesheet Qty"]),
+            "rate": 0.0,
+        }
+        for _, row in zero_price.iterrows()
+    ]
 
 
 def build_invoice(

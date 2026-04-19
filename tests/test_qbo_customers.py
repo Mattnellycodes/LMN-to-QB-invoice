@@ -3,7 +3,6 @@
 import os
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from src.qbo.customers import (
     get_api_base_url,

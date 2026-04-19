@@ -1,4 +1,4 @@
-"""LMN OAuth2 authentication using Resource Owner Password Credentials grant."""
+"""LMN authentication via the accounting API token endpoint."""
 
 from __future__ import annotations
 
@@ -11,20 +11,18 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-# LMN OAuth2 configuration
-LMN_AUTH_URL = "https://auth.golmn.com/connect/token"
-LMN_CLIENT_ID = "lmn.estimating"
-LMN_SCOPES = "openid profile email time estimating"
+LMN_TOKEN_URL = "https://accounting-api.golmn.com/token"
 
 
 class LMNAuthError(Exception):
     """Error during LMN authentication."""
+
     pass
 
 
 def authenticate(username: str, password: str) -> tuple[str, datetime]:
     """
-    Authenticate with LMN using Resource Owner Password Credentials grant.
+    Authenticate with LMN's accounting API.
 
     Args:
         username: LMN account username (email)
@@ -36,17 +34,15 @@ def authenticate(username: str, password: str) -> tuple[str, datetime]:
     Raises:
         LMNAuthError: If authentication fails
     """
-    data = {
-        "grant_type": "password",
-        "client_id": LMN_CLIENT_ID,
-        "username": username,
-        "password": password,
-        "scope": LMN_SCOPES,
-    }
+    data = (
+        f"grant_type=password"
+        f"&username={requests.utils.quote(username)}"
+        f"&password={requests.utils.quote(password)}"
+    )
 
     try:
         response = requests.post(
-            LMN_AUTH_URL,
+            LMN_TOKEN_URL,
             data=data,
             headers={"Content-Type": "application/x-www-form-urlencoded"},
             timeout=30,
@@ -58,13 +54,17 @@ def authenticate(username: str, password: str) -> tuple[str, datetime]:
                 error_data = response.json() if response.content else {}
             except Exception:
                 pass
-            error_msg = error_data.get("error_description", error_data.get("error", "Unknown error"))
-            logger.error(f"LMN auth failed: status={response.status_code}, response={response.text[:500]}")
+            error_msg = error_data.get(
+                "error_description", error_data.get("error", "Unknown error")
+            )
+            logger.error(
+                f"LMN auth failed: status={response.status_code}, response={response.text[:500]}"
+            )
             raise LMNAuthError(f"Authentication failed: {error_msg}")
 
         token_data = response.json()
         access_token = token_data.get("access_token")
-        expires_in = token_data.get("expires_in", 64800)  # Default ~18 hours
+        expires_in = token_data.get("expires_in", 36000)  # Default ~10 hours
 
         if not access_token:
             raise LMNAuthError("No access token in response")
@@ -84,38 +84,46 @@ def get_valid_token() -> Optional[str]:
 
     Priority:
     1. Cached token from database (if not expired)
-    2. Re-authenticate using stored credentials
+    2. Authenticate using LMN_EMAIL/LMN_PASSWORD env vars (cached to DB)
     3. Fall back to LMN_API_TOKEN environment variable
 
     Returns:
         A valid access token, or None if no token available.
     """
-    # Try cached token first
+    # Try cached token first, then authenticate and cache
     try:
-        from src.db.lmn_credentials import get_cached_token, get_lmn_credentials, save_lmn_token
+        from src.db.lmn_credentials import get_cached_token, save_lmn_token
 
         cached = get_cached_token()
         if cached:
             logger.debug("Using cached LMN token")
             return cached
 
-        # Try to authenticate with stored credentials
-        credentials = get_lmn_credentials()
-        if credentials:
-            username, password = credentials
+        email = os.getenv("LMN_EMAIL")
+        password = os.getenv("LMN_PASSWORD")
+        if email and password:
             try:
-                token, expires_at = authenticate(username, password)
+                token, expires_at = authenticate(email, password)
                 save_lmn_token(token, expires_at)
-                logger.info("Refreshed LMN token using stored credentials")
+                logger.info("Authenticated with LMN using env credentials")
                 return token
             except LMNAuthError as e:
-                logger.warning(f"Failed to refresh LMN token: {e}")
+                logger.warning(f"Failed to authenticate with LMN env credentials: {e}")
 
     except Exception as e:
-        # Database not available - fall through to env var
-        logger.debug(f"Database not available for LMN credentials: {e}")
+        logger.debug(f"Database not available for LMN token cache: {e}")
 
-    # Fall back to environment variable
+    # No database — authenticate directly without caching
+    email = os.getenv("LMN_EMAIL")
+    password = os.getenv("LMN_PASSWORD")
+    if email and password:
+        try:
+            token, _ = authenticate(email, password)
+            return token
+        except LMNAuthError as e:
+            logger.warning(f"Failed to authenticate with LMN env credentials: {e}")
+
+    # Fall back to static token env var
     env_token = os.getenv("LMN_API_TOKEN")
     if env_token:
         logger.debug("Using LMN_API_TOKEN from environment")

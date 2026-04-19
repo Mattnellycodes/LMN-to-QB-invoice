@@ -12,8 +12,8 @@ from src.lmn.api import (
 )
 
 
-# Sample API response matching real format
-SAMPLE_LMN_RESPONSE = [
+# Sample lmnitems matching real API format
+SAMPLE_LMN_ITEMS = [
     {
         "JobsiteID": 67135,
         "LMNAccountID": 7473,
@@ -39,13 +39,17 @@ SAMPLE_LMN_RESPONSE = [
     },
 ]
 
+# Full API response wraps lmnitems in a dict
+SAMPLE_LMN_RESPONSE = {"lmnitems": SAMPLE_LMN_ITEMS}
+
 
 class TestGetLmnToken:
     """Tests for get_lmn_token function."""
 
     def test_returns_token_when_set(self):
         """Token is returned when environment variable is set."""
-        with patch.dict("os.environ", {"LMN_API_TOKEN": "test_token_123"}):
+        env = {"LMN_API_TOKEN": "test_token_123"}
+        with patch.dict("os.environ", env, clear=True):
             assert get_lmn_token() == "test_token_123"
 
     def test_returns_none_when_not_set(self):
@@ -63,16 +67,16 @@ class TestGetJobMatching:
             with pytest.raises(ValueError, match="LMN_API_TOKEN"):
                 get_job_matching()
 
-    def test_returns_json_response(self):
-        """Returns parsed JSON from API response."""
+    def test_returns_lmnitems_from_response(self):
+        """Returns lmnitems list extracted from API response dict."""
         mock_response = MagicMock()
         mock_response.json.return_value = SAMPLE_LMN_RESPONSE
 
-        with patch.dict("os.environ", {"LMN_API_TOKEN": "test_token"}):
+        with patch.dict("os.environ", {"LMN_API_TOKEN": "test_token"}, clear=True):
             with patch("src.lmn.api.requests.get", return_value=mock_response) as mock_get:
                 result = get_job_matching()
 
-                assert result == SAMPLE_LMN_RESPONSE
+                assert result == SAMPLE_LMN_ITEMS
                 mock_get.assert_called_once()
                 # Verify auth header
                 call_kwargs = mock_get.call_args[1]
@@ -83,7 +87,7 @@ class TestGetJobMatching:
         mock_response = MagicMock()
         mock_response.raise_for_status.side_effect = Exception("401 Unauthorized")
 
-        with patch.dict("os.environ", {"LMN_API_TOKEN": "bad_token"}):
+        with patch.dict("os.environ", {"LMN_API_TOKEN": "bad_token"}, clear=True):
             with patch("src.lmn.api.requests.get", return_value=mock_response):
                 with pytest.raises(Exception):
                     get_job_matching()
@@ -94,7 +98,7 @@ class TestBuildMappingFromLmn:
 
     def test_builds_mapping_dict(self):
         """Converts API response to CustomerMapping dict."""
-        result = build_mapping_from_lmn(SAMPLE_LMN_RESPONSE)
+        result = build_mapping_from_lmn(SAMPLE_LMN_ITEMS)
 
         assert len(result) == 2  # Third item has empty AccountingID
         assert "67135" in result
@@ -103,7 +107,7 @@ class TestBuildMappingFromLmn:
 
     def test_mapping_values(self):
         """CustomerMapping objects have correct values."""
-        result = build_mapping_from_lmn(SAMPLE_LMN_RESPONSE)
+        result = build_mapping_from_lmn(SAMPLE_LMN_ITEMS)
 
         mapping = result["67135"]
         assert mapping.jobsite_id == "67135"
@@ -135,7 +139,7 @@ class TestLoadMappingFromLmnApi:
 
     def test_fetches_and_builds_mapping(self):
         """Fetches from API and builds mapping."""
-        with patch("src.lmn.api.get_job_matching", return_value=SAMPLE_LMN_RESPONSE):
+        with patch("src.lmn.api.get_job_matching", return_value=SAMPLE_LMN_ITEMS):
             result = load_mapping_from_lmn_api()
 
             assert len(result) == 2

@@ -246,12 +246,9 @@ def filter_billable_services(df: pd.DataFrame) -> pd.DataFrame:
     """
     Filter service data to only billable items.
 
-    Billable means: Total Price > 0 AND Invoice Type != 'Included'
+    Billable means: Total Price > 0.
     """
-    return df[
-        (df["Total Price"] > 0) &
-        (df["Invoice Type"].str.lower() != "included")
-    ].copy()
+    return df[df["Total Price"] > 0].copy()
 
 
 def filter_uninvoiced(df: pd.DataFrame) -> pd.DataFrame:

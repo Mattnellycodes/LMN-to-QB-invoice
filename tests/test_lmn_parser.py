@@ -2,11 +2,9 @@
 
 import pytest
 import pandas as pd
-from io import BytesIO, StringIO
+from io import BytesIO
 
 from src.parsing.lmn_parser import (
-    TIME_DATA_REQUIRED_COLUMNS,
-    SERVICE_DATA_REQUIRED_COLUMNS,
     detect_file_type,
     read_data_file,
     parse_time_data,
@@ -378,15 +376,13 @@ class TestParseServiceData:
 class TestFilterBillableServices:
     """Test filter_billable_services function."""
 
-    def test_filters_by_total_price_and_invoice_type(self, valid_service_data_csv):
-        """Filters to items with Total Price > 0 and Invoice Type != 'Included'."""
+    def test_filters_by_total_price(self, valid_service_data_csv):
+        """Filters to items with Total Price > 0."""
         df = parse_service_data(valid_service_data_csv)
         billable = filter_billable_services(df)
 
-        # Should exclude the "Included" item
         assert len(billable) == 2
         assert all(billable["Total Price"] > 0)
-        assert all(billable["Invoice Type"].str.lower() != "included")
 
     def test_returns_empty_when_no_billable(self, tmp_path):
         """Returns empty DataFrame when no billable items."""

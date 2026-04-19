@@ -1,8 +1,7 @@
 """Tests for database customer override operations."""
 
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
-import pytest
 
 from src.mapping.customer_mapping import CustomerMapping
 

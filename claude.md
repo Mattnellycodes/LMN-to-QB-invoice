@@ -159,6 +159,8 @@ QBO_CLIENT_SECRET=your_client_secret
 QBO_REDIRECT_URI=https://lmn-to-qb-invoice.onrender.com/qbo/callback
 QBO_ENVIRONMENT=sandbox  # Use "sandbox" for dev/test, "production" for real companies
 FLASK_SECRET_KEY=your_secret_key  # For Flask session security (auto-generated if not set)
+LMN_EMAIL=your_lmn_email          # LMN account email for API access
+LMN_PASSWORD=your_lmn_password    # LMN account password
 
 For production (Render):
 DATABASE_URL=postgresql://...  (auto-set when you link a PostgreSQL database)
@@ -167,12 +169,14 @@ Tokens are stored in the database automatically after running `python -m src.qbo
 Legacy: Token env vars (QBO_ACCESS_TOKEN, QBO_REFRESH_TOKEN, etc.) still supported but deprecated
 
 LMN Authentication
-The app supports automatic LMN authentication via OAuth2 (ROPC grant):
-- Enter LMN username/password on the home page to connect
-- Credentials are stored securely in the database
-- Access tokens are cached (~18 hour lifetime) and auto-refreshed
-- Falls back to LMN_API_TOKEN env var if no credentials stored
-- LMN auth endpoint: https://auth.golmn.com/connect/token
+The app authenticates against LMN's accounting API at https://accounting-api.golmn.com/token:
+- Token sources (priority order):
+  1. Cached token from database (if not expired)
+  2. Re-authenticate with DB-stored credentials (entered via home page)
+  3. LMN_EMAIL + LMN_PASSWORD from .env
+  4. LMN_API_TOKEN env var (bare token, legacy)
+- Access tokens are cached (~10 hour lifetime) and auto-refreshed
+- See docs/LMN_API.md for full endpoint details
 
 Duplicate Detection
 When processing invoices, the system checks for already-invoiced timesheets in the database. If duplicates are found:

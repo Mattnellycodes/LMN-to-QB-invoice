@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import logging
 import os
-import secrets
 from datetime import datetime, timedelta
-from typing import Dict, Optional, Tuple
-from urllib.parse import parse_qs, urlparse
+from typing import Optional, Tuple
 
 from dotenv import load_dotenv
 from intuitlib.client import AuthClient
@@ -243,7 +241,6 @@ def clear_stored_tokens() -> bool:
     Returns:
         True if tokens were cleared, False if no token file existed
     """
-    import json
 
     if os.path.exists(TOKEN_FILE):
         try:

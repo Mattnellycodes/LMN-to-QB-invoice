@@ -2,7 +2,132 @@
 
 {% block title %}Invoice Preview{% endblock %}
 
+{% block head %}
+<style>
+    .modal-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.6);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    .modal-card {
+        background: white;
+        border-radius: 12px;
+        padding: 30px;
+        max-width: 800px;
+        width: 90%;
+        max-height: 85vh;
+        overflow-y: auto;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+    }
+    .modal-card h2 {
+        margin-top: 0;
+        margin-bottom: 5px;
+    }
+    .modal-card .subtitle {
+        color: #666;
+        margin-bottom: 20px;
+    }
+    .zero-price-group {
+        margin-bottom: 20px;
+        padding: 15px;
+        background: #f8f9fa;
+        border-radius: 8px;
+    }
+    .zero-price-group h4 {
+        margin: 0 0 12px 0;
+        color: #2c3e50;
+    }
+    .zero-price-row {
+        display: grid;
+        grid-template-columns: 2fr 1fr 1fr;
+        gap: 10px;
+        margin-bottom: 10px;
+        align-items: end;
+    }
+    .zero-price-row label {
+        display: block;
+        font-size: 0.85em;
+        color: #555;
+        margin-bottom: 4px;
+    }
+    .zero-price-row input {
+        width: 100%;
+        padding: 8px 10px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        font-size: 14px;
+        box-sizing: border-box;
+    }
+    .zero-price-row input:focus {
+        border-color: #3498db;
+        outline: none;
+        box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
+    }
+    .zero-price-row input.error {
+        border-color: #e74c3c;
+        box-shadow: 0 0 0 2px rgba(231, 76, 60, 0.2);
+    }
+    .error-message {
+        color: #e74c3c;
+        font-size: 0.85em;
+        margin-top: 4px;
+        display: none;
+    }
+    .modal-actions {
+        margin-top: 20px;
+        text-align: right;
+    }
+</style>
+{% endblock %}
+
 {% block content %}
+{% if result.zero_price_items %}
+<div class="modal-overlay" id="zeroPriceModal">
+    <div class="modal-card">
+        <h2>Items Need Pricing</h2>
+        <p class="subtitle">The following items have no price set. Enter a price for each item to continue.</p>
+        <form action="{{ url_for('update_zero_price_items') }}" method="post" id="zeroPriceForm">
+            {% set ns = namespace(current_jobsite='') %}
+            {% for item in result.zero_price_items %}
+                {% if item.jobsite_name != ns.current_jobsite %}
+                    {% if ns.current_jobsite != '' %}</div>{% endif %}
+                    {% set ns.current_jobsite = item.jobsite_name %}
+                    <div class="zero-price-group">
+                    <h4>{{ item.customer_name }} &mdash; {{ item.jobsite_name }}</h4>
+                {% endif %}
+                <div class="zero-price-row">
+                    <div>
+                        <label>Description</label>
+                        <input type="text" name="description_{{ item.index }}" value="{{ item.description }}" required>
+                    </div>
+                    <div>
+                        <label>Quantity</label>
+                        <input type="number" name="quantity_{{ item.index }}" value="{{ item.quantity }}" step="any" min="0.01" required>
+                    </div>
+                    <div>
+                        <label>Price ($)</label>
+                        <input type="number" name="rate_{{ item.index }}" step="any" min="0.01" required
+                               placeholder="0.00" class="rate-input">
+                        <div class="error-message">Price must be greater than $0</div>
+                    </div>
+                </div>
+            {% endfor %}
+            {% if result.zero_price_items %}</div>{% endif %}
+            <div class="modal-actions">
+                <button type="submit" class="btn btn-success">Update Prices &amp; Continue</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endif %}
+
 <h1>Invoice Preview</h1>
 
 {% if result.lmn_mapping_count %}
@@ -156,4 +281,35 @@
 </div>
 <a href="{{ url_for('upload') }}" class="btn">Upload New Files</a>
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+    var form = document.getElementById('zeroPriceForm');
+    if (!form) return;
+
+    form.addEventListener('submit', function(e) {
+        var inputs = form.querySelectorAll('.rate-input');
+        var valid = true;
+
+        inputs.forEach(function(input) {
+            var errorMsg = input.nextElementSibling;
+            var val = parseFloat(input.value);
+            if (!input.value || isNaN(val) || val <= 0) {
+                input.classList.add('error');
+                if (errorMsg) errorMsg.style.display = 'block';
+                valid = false;
+            } else {
+                input.classList.remove('error');
+                if (errorMsg) errorMsg.style.display = 'none';
+            }
+        });
+
+        if (!valid) {
+            e.preventDefault();
+        }
+    });
+})();
+</script>
 {% endblock %}
