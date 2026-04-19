@@ -172,7 +172,7 @@ The app supports automatic LMN authentication via OAuth2 (ROPC grant):
 - Credentials are stored securely in the database
 - Access tokens are cached (~18 hour lifetime) and auto-refreshed
 - Falls back to LMN_API_TOKEN env var if no credentials stored
-- LMN auth endpoint: https://auth.golmn.com/connect/token
+- LMN auth endpoint: https://accounting-api.golmn.com/token
 
 Duplicate Detection
 When processing invoices, the system checks for already-invoiced timesheets in the database. If duplicates are found:

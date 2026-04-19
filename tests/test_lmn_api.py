@@ -12,8 +12,8 @@ from src.lmn.api import (
 )
 
 
-# Sample API response matching real format
-SAMPLE_LMN_RESPONSE = [
+# Sample items matching real LMN API lmnitems format
+SAMPLE_LMN_ITEMS = [
     {
         "JobsiteID": 67135,
         "LMNAccountID": 7473,
@@ -39,6 +39,13 @@ SAMPLE_LMN_RESPONSE = [
     },
 ]
 
+# Full API response wraps items in a dict
+SAMPLE_LMN_API_RESPONSE = {
+    "lmnitems": SAMPLE_LMN_ITEMS,
+    "qbitems": [],
+    "settings": {},
+}
+
 
 class TestGetLmnToken:
     """Tests for get_lmn_token function."""
@@ -63,16 +70,16 @@ class TestGetJobMatching:
             with pytest.raises(ValueError, match="LMN_API_TOKEN"):
                 get_job_matching()
 
-    def test_returns_json_response(self):
-        """Returns parsed JSON from API response."""
+    def test_returns_lmnitems_from_response(self):
+        """Returns lmnitems list extracted from API response dict."""
         mock_response = MagicMock()
-        mock_response.json.return_value = SAMPLE_LMN_RESPONSE
+        mock_response.json.return_value = SAMPLE_LMN_API_RESPONSE
 
         with patch.dict("os.environ", {"LMN_API_TOKEN": "test_token"}):
             with patch("src.lmn.api.requests.get", return_value=mock_response) as mock_get:
                 result = get_job_matching()
 
-                assert result == SAMPLE_LMN_RESPONSE
+                assert result == SAMPLE_LMN_ITEMS
                 mock_get.assert_called_once()
                 # Verify auth header
                 call_kwargs = mock_get.call_args[1]
@@ -94,7 +101,7 @@ class TestBuildMappingFromLmn:
 
     def test_builds_mapping_dict(self):
         """Converts API response to CustomerMapping dict."""
-        result = build_mapping_from_lmn(SAMPLE_LMN_RESPONSE)
+        result = build_mapping_from_lmn(SAMPLE_LMN_ITEMS)
 
         assert len(result) == 2  # Third item has empty AccountingID
         assert "67135" in result
@@ -103,7 +110,7 @@ class TestBuildMappingFromLmn:
 
     def test_mapping_values(self):
         """CustomerMapping objects have correct values."""
-        result = build_mapping_from_lmn(SAMPLE_LMN_RESPONSE)
+        result = build_mapping_from_lmn(SAMPLE_LMN_ITEMS)
 
         mapping = result["67135"]
         assert mapping.jobsite_id == "67135"
@@ -135,7 +142,7 @@ class TestLoadMappingFromLmnApi:
 
     def test_fetches_and_builds_mapping(self):
         """Fetches from API and builds mapping."""
-        with patch("src.lmn.api.get_job_matching", return_value=SAMPLE_LMN_RESPONSE):
+        with patch("src.lmn.api.get_job_matching", return_value=SAMPLE_LMN_ITEMS):
             result = load_mapping_from_lmn_api()
 
             assert len(result) == 2
