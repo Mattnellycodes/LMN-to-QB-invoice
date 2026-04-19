@@ -70,7 +70,7 @@ class TestGetJobMatching:
     def test_returns_lmnitems_from_response(self):
         """Returns lmnitems list extracted from API response dict."""
         mock_response = MagicMock()
-        mock_response.json.return_value = SAMPLE_LMN_API_RESPONSE
+        mock_response.json.return_value = SAMPLE_LMN_RESPONSE
 
         with patch.dict("os.environ", {"LMN_API_TOKEN": "test_token"}, clear=True):
             with patch("src.lmn.api.requests.get", return_value=mock_response) as mock_get:
