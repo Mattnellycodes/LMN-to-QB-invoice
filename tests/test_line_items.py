@@ -12,6 +12,7 @@ from src.invoice.line_items import (
     extract_zero_price_items,
     format_labor_description,
     load_included_items,
+    strip_unit_marker,
 )
 
 
@@ -150,11 +151,23 @@ def test_load_included_items_reads_config_file():
     assert len(items) == 10
 
 
-def test_service_lines_carry_item_lookup_name():
+def test_service_lines_strip_unit_marker_from_item_lookup_name():
     services = [_svc("Mulch, Soil Pep, bulk [Yd]", qty=6, total=378.48, rate=63.08)]
     items = extract_service_line_items(services, INCLUDED)
+    # Customer-facing description keeps the unit marker.
     assert items[0].description == "Mulch, Soil Pep, bulk [Yd]"
-    assert items[0].item_lookup_name == "Mulch, Soil Pep, bulk [Yd]"
+    # QBO lookup key strips it so names like "Mulch, Soil Pep, bulk" match.
+    assert items[0].item_lookup_name == "Mulch, Soil Pep, bulk"
+
+
+def test_strip_unit_marker_handles_various_shapes():
+    assert strip_unit_marker("Deer Spray, Bozeman, ea [ea]") == "Deer Spray, Bozeman, ea"
+    assert strip_unit_marker("Hedge Shearing [Day]") == "Hedge Shearing"
+    assert strip_unit_marker("Weed Mat Pins") == "Weed Mat Pins"
+    assert strip_unit_marker("") == ""
+    assert strip_unit_marker("Name [lb]  ") == "Name"
+    # Brackets mid-string are NOT stripped — only a single trailing marker.
+    assert strip_unit_marker("Foo [x] bar") == "Foo [x] bar"
 
 
 def test_labor_line_uses_rate_name_as_lookup_description_preserved():

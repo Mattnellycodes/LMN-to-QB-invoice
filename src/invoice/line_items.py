@@ -8,6 +8,7 @@ zero-price modal.
 
 from __future__ import annotations
 
+import re
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -19,6 +20,19 @@ from src.parsing.pdf_parser import parse_money, parse_qty
 
 
 INCLUDED_ITEMS_PATH = Path(__file__).resolve().parents[2] / "config" / "included_items.txt"
+
+# LMN service names include a trailing unit-of-measure tag (e.g.
+# "Deer Spray, Bozeman, ea [ea]", "Mulch, Soil Pep, bulk [Yd]"). QBO items
+# are named without the tag, so strip it before using the name as a lookup
+# key. Customer-facing `description` still carries the full LMN string.
+_UNIT_MARKER_RE = re.compile(r"\s*\[[^\]]*\]\s*$")
+
+
+def strip_unit_marker(name: str) -> str:
+    """Remove a trailing `[unit]` tag from an LMN service name."""
+    if not name:
+        return ""
+    return _UNIT_MARKER_RE.sub("", name).strip()
 
 
 @dataclass
@@ -142,7 +156,7 @@ def extract_service_line_items(
                 quantity=qty,
                 rate=rate,
                 amount=round(total, 2),
-                item_lookup_name=desc,
+                item_lookup_name=strip_unit_marker(desc),
             )
         else:
             existing.quantity = round(existing.quantity + qty, 4)
