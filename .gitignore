@@ -56,3 +56,6 @@ data/
 *.csv
 !docs/sample_data/*.csv
 !config/customer_mapping.csv
+
+# Sample Sheets
+Sample Time Sheets
