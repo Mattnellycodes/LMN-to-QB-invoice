@@ -1,21 +1,27 @@
 # LMN to QuickBooks Invoice Automation
 
-Automates the creation of QuickBooks Online draft invoices from LMN (landscaping management software) timesheet exports.
+Automates the creation of QuickBooks Online draft invoices from a single LMN
+"Job History (All Details)" PDF.
 
 ## What It Does
 
-Takes two exports from LMN (CSV or Excel) and creates draft invoices in QuickBooks Online:
-
 ```
-LMN Time Data (.csv, .xlsx, .xls)  ─┐
-                                      ├──►  Python Script  ──►  QBO Draft Invoices
-LMN Service Data (.csv, .xlsx, .xls)┘
+LMN Job History PDF  ──►  Flask Web App  ──►  QBO Draft Invoices
 ```
 
-Each invoice includes:
-- **Labor line**: Billable hours (work time + allocated drive time) × hourly rate
-- **Materials/services**: Items from the service data export
-- **Direct payment fee**: Automatically calculated based on subtotal
+For the reporting period covered by the uploaded PDF, the app:
+
+1. Parses all tasks (customer work and *SHOP overhead).
+2. Pools CostCode 900 hours under `*SHOP` keyed by `(date, foreman)`.
+3. For each `(date, foreman)`, splits the pool equally across the billable
+   jobsites that foreman worked that day.
+4. Aggregates per-jobsite work plus allocated drive into one invoice per
+   jobsite, covering all dates in the PDF.
+5. Adds service/material line items (deduped by description) with
+   `Total Price > $0`; items whose exact name is on the included-items
+   allow-list with `$0` price are silently dropped; other `$0` items surface
+   in a modal with the crew's notes.
+6. Calculates the direct-payment fee and creates draft invoices in QBO.
 
 ## Quick Start
 
@@ -25,17 +31,7 @@ Each invoice includes:
 pip install -r requirements.txt
 ```
 
-### 2. Preview Invoices (No QBO Connection Required)
-
-```bash
-python -m src.main --preview \
-  --time-data path/to/time_data.csv \
-  --service-data path/to/service_data.csv
-```
-
-Note: The web interface is now the recommended way to upload and process files. It supports CSV, .xlsx, and .xls files with automatic detection.
-
-### 3. Set Up QuickBooks Connection
+### 2. Set Up QuickBooks Connection
 
 Copy `.env.example` to `.env` and add your QBO credentials:
 
@@ -44,190 +40,74 @@ cp .env.example .env
 ```
 
 Required environment variables:
+
 ```
 QBO_CLIENT_ID=your_client_id
 QBO_CLIENT_SECRET=your_client_secret
 QBO_REDIRECT_URI=https://lmn-to-qb-invoice.onrender.com/qbo/callback
-LMN_API_TOKEN=your_lmn_api_token  # Optional - credentials can be stored via web UI instead
 ```
 
-#### OAuth Authentication
-
-Run the interactive OAuth setup:
+Then authorize once:
 
 ```bash
 python -m src.qbo.auth setup
 ```
 
-This will:
-1. Open your browser to the QuickBooks authorization page
-2. Prompt you to sign in and authorize the app
-3. Capture the callback and exchange the code for tokens
-4. Save tokens locally to `config/.qbo_tokens.json`
-
-#### OAuth CLI Commands
+### 3. Run the Web App
 
 ```bash
-# Interactive OAuth authorization
-python -m src.qbo.auth setup
-
-# Export tokens for Render deployment
-python -m src.qbo.auth export
-
-# Manually refresh access token
-python -m src.qbo.auth refresh
-
-# Clear stored tokens
-python -m src.qbo.auth clear
+python app.py
 ```
 
-#### Deploying to Render
+Open <http://localhost:5000>.
 
-Tokens are automatically stored in PostgreSQL on Render:
+### 4. Upload the PDF
 
-1. **Link a PostgreSQL database** to your Render service
-2. **Set these environment variables** in Render dashboard:
-   - `QBO_CLIENT_ID`
-   - `QBO_CLIENT_SECRET`
-   - `QBO_REDIRECT_URI`
-   - `DATABASE_URL` (auto-set when you link a PostgreSQL database)
+From LMN, export **Job History (All Details)** for the target week, filtered
+to the T-Town group. The report must include the `*SHOP` jobsite.
 
-3. **Authorize once locally**, then run the app on Render:
-   ```bash
-   python -m src.qbo.auth setup
-   ```
-   This saves tokens to your local `config/.qbo_tokens.json`. When you deploy to Render, move the tokens to the Render database:
-   ```bash
-   python -m src.qbo.auth export
-   ```
+1. Go to the Upload page.
+2. Drop or select the PDF.
+3. The app previews invoices, shows any unmapped jobsites, and any $0 items
+   that need a price.
+4. Click "Create Draft Invoices in QuickBooks".
 
-Tokens are now stored securely in the PostgreSQL database instead of environment variables. See [docs/QB_OAuth.md](docs/QB_OAuth.md) for full details.
+### 5. Customer Mapping
 
-### 4. Upload Files (Web Interface)
+JobsiteID → QBO Customer mappings come from two sources:
 
-Once connected to QuickBooks, use the web interface to upload your LMN exports:
+- `config/customer_mapping.csv` — static overrides.
+- LMN API — fetched automatically if `LMN_EMAIL` / `LMN_PASSWORD` are set or
+  credentials are saved via the home page.
 
-1. **Go to Upload Page** - Click "Upload Files" from the home page
-2. **Drop or Browse Files** - Use the drag-and-drop zone to select your Time Data and Service Data files
-3. **Supported Formats** - The app accepts .csv, .xlsx, and .xls files
-4. **Auto-Detection** - Files are automatically detected based on filename and content:
-   - Files with "time" in the name → Time Data
-   - Files with "service" in the name → Service Data
-   - If filename is ambiguous, the app checks the file contents
-5. **Live Preview** - As you select files, the interface shows detection results with colored badges
+Unmapped jobsites are surfaced in the UI so you can match them before
+creating invoices.
 
-For detailed instructions, see the [Google Docs guide](https://docs.google.com/document/d/1J_hYbSsxYORKLG77RrbUNZY6MmxMTLKOCaqxqx5VHog/edit?usp=sharing).
+### 6. Included-Items Allow-List
 
-### 5. Connect to LMN (Optional)
-
-The app can automatically load customer mappings from the LMN API. To enable automatic mapping:
-
-1. **On the Home Page** - Navigate to the "LMN Connection" section
-2. **Enter Credentials** - Provide your LMN username and password
-3. **Automatic Storage** - Credentials are securely stored in the database
-4. **Token Caching** - Access tokens are cached and automatically refreshed (~18 hour lifetime)
-
-**Environment Variable Fallback**
-If you prefer not to enter credentials through the web interface, you can set the environment variable:
-```bash
-LMN_API_TOKEN=your_lmn_api_token
-```
-
-The app checks for stored credentials first, then falls back to the environment variable.
-
-### 6. Set Up Customer Mapping
-
-Create a mapping between LMN JobsiteIDs and QBO CustomerIDs in `config/customer_mapping.csv`:
-
-```csv
-JobsiteID,QBO_CustomerID,QBO_DisplayName,Notes
-5440055,123456,Zhenya Yoder,
-5525262,789012,Karen Gilhousen,
-```
-
-Helper commands:
-
-```bash
-# Extract jobsites from LMN data
-python -m src.mapping.build_mapping lmn-jobsites --input path/to/time_data.csv
-
-# Export QBO customers for reference
-python -m src.mapping.build_mapping qbo-customers
-```
-
-### 7. Review and Create Invoices
-
-After uploading and mapping jobsites (if needed):
-
-1. **Review** - The app shows a preview of all draft invoices
-2. **Check for Duplicates** - If any timesheets have already been invoiced, they're displayed with a warning. You can skip these to avoid creating duplicate invoices.
-3. **Adjust Mapping** - Map any new jobsites to QuickBooks customers
-4. **Create** - Click "Create Invoices" to create draft invoices in QuickBooks
-
-If using the CLI instead of the web interface:
-
-```bash
-# Dry run (shows what would be created)
-python -m src.main --dry-run \
-  --time-data path/to/time_data.csv \
-  --service-data path/to/service_data.csv
-
-# Create draft invoices in QBO
-python -m src.main \
-  --time-data path/to/time_data.csv \
-  --service-data path/to/service_data.csv
-```
-
-## Command Reference
-
-```bash
-python -m src.main [OPTIONS]
-
-Required:
-  --time-data PATH      LMN Job History Time Data CSV
-  --service-data PATH   LMN Job History Service Data CSV
-
-Optional:
-  --mapping PATH        Customer mapping CSV (default: config/customer_mapping.csv)
-  --date YYYY-MM-DD     Invoice date (default: today)
-  --preview             Show detailed invoice preview
-  --dry-run             Show what would be created without calling QBO API
-```
-
-## LMN Export Requirements
-
-The app accepts exports in **CSV, .xlsx, or .xls formats**. Files are auto-detected based on filename and content.
-
-### Time Data Export (Job History Time Data)
-
-Required columns:
-- `TimesheetID`, `JobsiteID`, `Jobsite`, `CustomerName`
-- `TaskName`, `CostCode`, `Man Hours`, `Billable Rate`, `EndDate`
-
-File naming: Include "time" in the filename for best detection (e.g., `time_data.csv`, `TimeData.xlsx`)
-
-### Service Data Export (Job History Service Data)
-
-Required columns:
-- `TimesheetID`, `JobsiteID`, `Service_Activity`
-- `Timesheet Qty`, `Invoice Type`, `Unit Price`, `Total Price`, `Invoiced`, `EndDate`
-
-File naming: Include "service" in the filename for best detection (e.g., `service_data.csv`, `ServiceData.xlsx`)
+`config/included_items.txt` lists exact service names bundled in customer
+package prices. When these names appear on the PDF with `Total Price = $0`,
+they are silently dropped from the invoice (matching is case-sensitive).
+Any other `$0` item is shown in the zero-price modal with its date, foreman,
+and crew notes so you can decide whether to price it or ignore it.
 
 ## Business Logic
 
-### Drive Time Allocation
+### Drive-Time Allocation
 
-Drive time (CostCode 900) is split equally among all jobsites in a timesheet:
+Shop pool = total `CostCode 900` (Land Time + Drive Time) under `*SHOP`.
+Per-day, per-foreman:
 
 ```
-Allocated Drive Time = Total Drive Hours ÷ Number of Unique Jobsites
+Allocated Drive Time per Jobsite = Shop Hours(date, foreman)
+                                  / |Jobsites(date, foreman)|
 ```
 
 ### Billable Hours
 
 ```
-Billable Hours = Work Hours (CostCode 200) + Allocated Drive Time
+Billable Hours per Jobsite = sum(CostCode 200 hours) + Allocated Drive Time
+                             (across all dates in the PDF)
 ```
 
 ### Direct Payment Fee
@@ -238,61 +118,63 @@ Billable Hours = Work Hours (CostCode 200) + Allocated Drive Time
 | $1,000 - $2,000 | $15 flat |
 | Over $2,000 | $20 flat |
 
-### Billable Line Items
+### Duplicate Detection
 
-Items from service data are included when:
-- `Total Price > 0`, AND
-- `Invoice Type` is not "Included"
+Successful QBO invoices record `(jobsite_id, date, foreman)` triples in the
+`invoice_history` table. A new upload that overlaps any prior triple triggers
+a warning banner on the preview; you can opt to skip overlapping jobsites.
 
 ## Development
 
 ### Run Tests
 
 ```bash
-pytest tests/ -v
+pytest -v
+```
+
+### Lint
+
+```bash
+ruff check src tests
 ```
 
 ### Project Structure
 
 ```
 src/
-├── main.py                 # CLI entry point
-├── parsing/                # File parsing (CSV/Excel)
-├── calculations/           # Time and drive allocation
-├── invoice/                # Invoice building
-├── qbo/                    # QuickBooks API
-└── mapping/                # Customer mapping
+├── parsing/pdf_parser.py     # LMN Job History PDF parser (pypdfium2-based)
+├── calculations/allocation.py # Shop pool + per-jobsite allocation
+├── invoice/line_items.py     # Aggregated invoice building
+├── qbo/                      # QuickBooks Online API integration
+├── lmn/                      # LMN API (customer mapping)
+├── mapping/                  # JobsiteID -> QBO CustomerID
+└── db/                       # Invoice history, overrides, LMN credentials
+app.py                        # Flask web application
+config/
+├── customer_mapping.csv      # Manual jobsite mapping overrides
+└── included_items.txt        # Bundled-item allow-list ($0 auto-drop)
 ```
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed design documentation.
+See [ARCHITECTURE.md](ARCHITECTURE.md) and [CLAUDE.md](CLAUDE.md) for
+further detail.
 
 ## Troubleshooting
 
-### "Invalid grant" error during customer mapping / QuickBooks search
+### "*SHOP jobsite (5613100W) not found in PDF"
 
-When searching for QuickBooks customers during mapping (web UI or CLI), you may see:
-```
-ERROR: Invalid grant error during refresh: {"error":"invalid_grant","error_description":"Incorrect or invalid refresh token"}
-```
+The uploaded PDF doesn't include the `*SHOP` jobsite. Re-run the LMN export
+without filtering out the shop job — the app needs it for drive-time
+allocation.
 
-This means your OAuth tokens have expired or been revoked. Re-authorize:
+### "Invalid grant error" during customer mapping
+
+OAuth tokens expired or were revoked:
+
 ```bash
 python -m src.qbo.auth setup
 ```
 
-Note: `--preview` mode still triggers QBO searches during interactive mapping. Workaround: skip mapping with 's' or pre-populate `config/customer_mapping.csv` manually.
+### `$0` item keeps appearing in the zero-price modal
 
-
-### "No stored tokens found"
-
-Run OAuth setup: `python -m src.qbo.auth setup`
-
-### "JobsiteID not in mapping"
-
-Add the missing JobsiteID to `config/customer_mapping.csv`
-
-### QBO API Errors
-
-- Check that your OAuth tokens are valid (they expire after ~100 days)
-- Verify the QBO CustomerID exists in QuickBooks
-- Check QBO API rate limits if processing many invoices
+Add its exact service name (including capitalization and trailing tags like
+`(VT)`) to `config/included_items.txt`.

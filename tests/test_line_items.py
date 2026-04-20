@@ -1,291 +1,150 @@
-"""Tests for invoice line item functions."""
+"""Tests for invoice line-item building: dedupe, included filter, zero-price notes."""
+
+from __future__ import annotations
 
 import pytest
-import pandas as pd
 
+from src.calculations.allocation import JobsiteRollup
 from src.invoice.line_items import (
-    calculate_direct_payment_fee,
-    format_labor_description,
-    format_date_short,
-    extract_service_line_items,
     build_invoice,
-    build_all_invoices,
+    calculate_direct_payment_fee,
+    extract_service_line_items,
+    extract_zero_price_items,
+    format_labor_description,
+    load_included_items,
 )
-from src.calculations.time_calc import JobsiteHours
 
 
-class TestDirectPaymentFee:
-    """Tests for fee calculation tiers."""
-
-    def test_fee_under_1000_is_10_percent(self):
-        assert calculate_direct_payment_fee(100) == 10.00
-        assert calculate_direct_payment_fee(500) == 50.00
-        assert calculate_direct_payment_fee(999.99) == 100.00  # rounds to 100.00
-
-    def test_fee_at_1000_is_15_flat(self):
-        assert calculate_direct_payment_fee(1000) == 15.00
-
-    def test_fee_between_1000_and_2000_is_15_flat(self):
-        assert calculate_direct_payment_fee(1500) == 15.00
-        assert calculate_direct_payment_fee(2000) == 15.00
-
-    def test_fee_over_2000_is_20_flat(self):
-        assert calculate_direct_payment_fee(2000.01) == 20.00
-        assert calculate_direct_payment_fee(5000) == 20.00
-        assert calculate_direct_payment_fee(10000) == 20.00
-
-    def test_fee_zero_subtotal(self):
-        assert calculate_direct_payment_fee(0) == 0.00
+INCLUDED = frozenset(["GRUB-SPRING(VT)", "General Garden Maintenance(VT)", "Small Project"])
 
 
-class TestFormatLaborDescription:
-    """Tests for labor line item description formatting."""
-
-    def test_single_date(self):
-        result = format_labor_description(["2026-01-05"])
-        assert result == "Skilled Garden Hourly Labor 1/05"
-
-    def test_date_range(self):
-        result = format_labor_description(["2026-01-05", "2026-01-06", "2026-01-07"])
-        assert result == "Skilled Garden Hourly Labor 1/05-1/07"
-
-    def test_with_task_summary(self):
-        result = format_labor_description(["2026-01-05"], "refresh winter containers")
-        assert result == "Skilled Garden Hourly Labor 1/05- refresh winter containers"
-
-    def test_no_dates(self):
-        result = format_labor_description([])
-        assert result == "Skilled Garden Hourly Labor"
+def _svc(description: str, qty: float = 1.0, total: float = 0.0, rate: float = 0.0,
+         date: str = "Mon-Apr-13-2026", foreman: str = "Jenna Andrews", notes: str = "") -> dict:
+    return {
+        "description": description,
+        "act_qty": str(qty),
+        "inv_qty": str(qty),
+        "rate": f"${rate:.2f}",
+        "total_price": f"${total:.2f}",
+        "source_context": {"date": date, "foreman": foreman, "notes": notes},
+    }
 
 
-class TestFormatDateShort:
-    """Tests for date formatting."""
+def test_included_zero_price_items_dropped():
+    services = [
+        _svc("GRUB-SPRING(VT)", qty=1, total=0, rate=0),
+        _svc("Deer Spray", qty=1, total=10, rate=10),
+    ]
+    billable = extract_service_line_items(services, INCLUDED)
+    assert len(billable) == 1
+    assert billable[0].description == "Deer Spray"
 
-    def test_standard_date(self):
-        assert format_date_short("2026-01-05") == "1/05"
-        assert format_date_short("2026-11-24") == "11/24"
-
-    def test_invalid_date_returns_original(self):
-        assert format_date_short("invalid") == "invalid"
-        assert format_date_short("") == ""
-
-
-# =============================================================================
-# Test Fixtures for Invoice Building
-# =============================================================================
+    zero = extract_zero_price_items(services, INCLUDED)
+    assert zero == [], "Included zero-price items must not surface in modal"
 
 
-@pytest.fixture
-def sample_service_df():
-    """Sample service data DataFrame."""
-    return pd.DataFrame({
-        "JobsiteID": ["JS001", "JS001", "JS002", "JS001"],
-        "Service_Activity": ["Mulch", "Plants", "Fertilizer", "Included Item"],
-        "Timesheet Qty": [5, 10, 2, 1],
-        "Invoice Type": ["Per Unit", "Per Unit", "Per Unit", "Included"],
-        "Unit Price": [45.0, 25.0, 30.0, 0.0],
-        "Total Price": [225.0, 250.0, 60.0, 0.0],
-    })
+def test_unknown_zero_price_item_goes_to_modal_with_notes():
+    services = [
+        _svc("Mystery Task", qty=2, total=0, rate=0, notes="Crew mentioned new service"),
+    ]
+    zero = extract_zero_price_items(services, INCLUDED)
+    assert len(zero) == 1
+    assert zero[0]["description"] == "Mystery Task"
+    assert zero[0]["source_context"]["notes"] == "Crew mentioned new service"
+    assert zero[0]["rate"] == 0.0
+    assert zero[0]["quantity"] == 2.0
 
 
-@pytest.fixture
-def sample_jobsite_hours():
-    """Sample JobsiteHours object."""
-    return JobsiteHours(
-        jobsite_id="JS001",
-        jobsite_name="123 Main St",
-        customer_name="John Smith",
-        work_hours=2.5,
-        allocated_drive_time=0.5,
-        total_billable_hours=3.0,
-        billable_rate=75.0,
-        dates=["2026-01-15"],
+def test_services_dedupe_by_description():
+    services = [
+        _svc("Delivery, Bozeman", qty=1, total=85, rate=85),
+        _svc("Delivery, Bozeman", qty=1, total=85, rate=85),
+        _svc("Dump fee", qty=0.25, total=13.75, rate=55),
+    ]
+    items = extract_service_line_items(services, INCLUDED)
+    descs = [i.description for i in items]
+    assert descs.count("Delivery, Bozeman") == 1
+    delivery = next(i for i in items if i.description == "Delivery, Bozeman")
+    assert delivery.quantity == pytest.approx(2.0)
+    assert delivery.amount == pytest.approx(170.0)
+
+
+def test_similarly_named_billable_item_is_not_skipped():
+    """'Small Project' with $0 is bundled; with a real price it must bill."""
+    services = [
+        _svc("Small Project", qty=1, total=0, rate=0),         # bundled — drop
+        _svc("Small Project Extra", qty=1, total=50, rate=50),  # different name, bills
+    ]
+    items = extract_service_line_items(services, INCLUDED)
+    assert [i.description for i in items] == ["Small Project Extra"]
+    assert extract_zero_price_items(services, INCLUDED) == []
+
+
+def test_bundled_name_with_real_price_still_bills():
+    """Exact-match + zero-price is the gate. A 'Small Project' with $ bills normally."""
+    services = [_svc("Small Project", qty=1, total=120, rate=120)]
+    items = extract_service_line_items(services, INCLUDED)
+    assert len(items) == 1
+    assert items[0].amount == 120.0
+
+
+def test_zero_price_with_zero_quantity_is_ignored():
+    services = [_svc("Ghost Item", qty=0, total=0, rate=0)]
+    assert extract_zero_price_items(services, INCLUDED) == []
+
+
+def test_direct_payment_fee_tiers():
+    assert calculate_direct_payment_fee(500) == pytest.approx(50.0)
+    assert calculate_direct_payment_fee(1000) == 15.0
+    assert calculate_direct_payment_fee(1500) == 15.0
+    assert calculate_direct_payment_fee(2001) == 20.0
+
+
+def test_format_labor_description_single_and_range():
+    assert format_labor_description(["Mon-Apr-13-2026"]) == "Skilled Garden Hourly Labor 4/13"
+    assert (
+        format_labor_description(["Mon-Apr-13-2026", "Wed-Apr-15-2026"])
+        == "Skilled Garden Hourly Labor 4/13-4/15"
     )
 
 
-@pytest.fixture
-def zero_hours_jobsite():
-    """JobsiteHours with no billable hours."""
-    return JobsiteHours(
-        jobsite_id="JS003",
-        jobsite_name="789 Pine St",
-        customer_name="Bob Builder",
-        work_hours=0,
-        allocated_drive_time=0,
-        total_billable_hours=0,
-        billable_rate=75.0,
-        dates=[],
+def test_build_invoice_aggregates_labor_and_items():
+    rollup = JobsiteRollup(
+        jobsite_id="ABC",
+        customer_name="Customer A",
+        hourly_rate=75.0,
     )
+    rollup.work_by_date_foreman[("Mon-Apr-13-2026", "Jenna")] = 10.0
+    rollup.work_by_date_foreman[("Tue-Apr-14-2026", "Jenna")] = 4.0
+    rollup.allocated_drive_hours = 2.0
+    rollup.services = [
+        _svc("Dump fee", qty=0.25, total=13.75, rate=55),
+        _svc("GRUB-SPRING(VT)", qty=1, total=0, rate=0),  # dropped
+    ]
+
+    inv = build_invoice(rollup, INCLUDED, invoice_date="2026-04-19")
+
+    # Labor line: 14 work + 2 drive = 16h * $75 = $1200
+    labor = inv.line_items[0]
+    assert labor.quantity == pytest.approx(16.0)
+    assert labor.rate == 75.0
+    assert labor.amount == 1200.0
+
+    descs = [i.description for i in inv.line_items]
+    assert "Dump fee" in descs
+    assert "GRUB-SPRING(VT)" not in descs
+
+    # date_foreman_pairs built from (date, foreman) keys
+    assert inv.date_foreman_pairs == sorted([
+        "Mon-Apr-13-2026|Jenna",
+        "Tue-Apr-14-2026|Jenna",
+    ])
 
 
-# =============================================================================
-# Test extract_service_line_items
-# =============================================================================
-
-
-class TestExtractServiceLineItems:
-    """Tests for extracting service line items from DataFrame."""
-
-    def test_extracts_billable_items_for_jobsite(self, sample_service_df):
-        """Extracts only billable items for specified jobsite."""
-        items = extract_service_line_items(sample_service_df, "JS001")
-
-        # Should get Mulch and Plants, not Included Item
-        assert len(items) == 2
-        assert items[0].description == "Mulch"
-        assert items[0].quantity == 5
-        assert items[0].rate == 45.0
-        assert items[0].amount == 225.0
-
-    def test_excludes_zero_total_price_items(self, sample_service_df):
-        """Excludes items with Total Price = 0."""
-        items = extract_service_line_items(sample_service_df, "JS001")
-
-        descriptions = [item.description for item in items]
-        assert "Included Item" not in descriptions
-
-    def test_returns_empty_for_nonexistent_jobsite(self, sample_service_df):
-        """Returns empty list for jobsite with no services."""
-        items = extract_service_line_items(sample_service_df, "NONEXISTENT")
-        assert items == []
-
-    def test_filters_by_jobsite_id(self, sample_service_df):
-        """Only returns items for the specified jobsite."""
-        items = extract_service_line_items(sample_service_df, "JS002")
-
-        assert len(items) == 1
-        assert items[0].description == "Fertilizer"
-
-
-# =============================================================================
-# Test build_invoice
-# =============================================================================
-
-
-class TestBuildInvoice:
-    """Tests for building complete invoice data."""
-
-    def test_builds_complete_invoice(self, sample_jobsite_hours, sample_service_df):
-        """Builds invoice with labor and service items."""
-        invoice = build_invoice(sample_jobsite_hours, sample_service_df, "2026-01-20")
-
-        assert invoice.jobsite_id == "JS001"
-        assert invoice.jobsite_name == "123 Main St"
-        assert invoice.customer_name == "John Smith"
-        assert invoice.invoice_date == "2026-01-20"
-
-    def test_includes_labor_line_item(self, sample_jobsite_hours, sample_service_df):
-        """Includes labor line item when billable hours > 0."""
-        invoice = build_invoice(sample_jobsite_hours, sample_service_df)
-
-        labor_items = [i for i in invoice.line_items if "Labor" in i.description]
-        assert len(labor_items) == 1
-        assert labor_items[0].quantity == 3.0
-        assert labor_items[0].rate == 75.0
-        assert labor_items[0].amount == 225.0
-
-    def test_excludes_labor_when_zero_hours(self, zero_hours_jobsite, sample_service_df):
-        """Excludes labor line item when billable hours = 0."""
-        invoice = build_invoice(zero_hours_jobsite, sample_service_df)
-
-        labor_items = [i for i in invoice.line_items if "Labor" in i.description]
-        assert len(labor_items) == 0
-
-    def test_calculates_subtotal(self, sample_jobsite_hours, sample_service_df):
-        """Calculates correct subtotal."""
-        invoice = build_invoice(sample_jobsite_hours, sample_service_df)
-
-        # Labor: 3.0 * 75 = 225, Mulch: 225, Plants: 250 = 700
-        assert invoice.subtotal == 700.0
-
-    def test_adds_direct_payment_fee(self, sample_jobsite_hours, sample_service_df):
-        """Adds direct payment fee based on subtotal."""
-        invoice = build_invoice(sample_jobsite_hours, sample_service_df)
-
-        # Subtotal 700 -> 10% fee = 70
-        assert invoice.direct_payment_fee == 70.0
-
-    def test_calculates_total(self, sample_jobsite_hours, sample_service_df):
-        """Calculates correct total with fee."""
-        invoice = build_invoice(sample_jobsite_hours, sample_service_df)
-
-        # 700 + 70 = 770
-        assert invoice.total == 770.0
-
-    def test_includes_fee_line_item(self, sample_jobsite_hours, sample_service_df):
-        """Includes fee as a line item."""
-        invoice = build_invoice(sample_jobsite_hours, sample_service_df)
-
-        fee_items = [i for i in invoice.line_items if "check" in i.description.lower()]
-        assert len(fee_items) == 1
-
-    def test_uses_current_date_when_not_provided(self, sample_jobsite_hours, sample_service_df):
-        """Uses current date when invoice_date not provided."""
-        invoice = build_invoice(sample_jobsite_hours, sample_service_df)
-
-        # Should be a valid date string
-        assert invoice.invoice_date is not None
-        assert len(invoice.invoice_date) == 10  # YYYY-MM-DD format
-
-
-# =============================================================================
-# Test build_all_invoices
-# =============================================================================
-
-
-class TestBuildAllInvoices:
-    """Tests for building invoices for multiple jobsites."""
-
-    def test_builds_invoices_for_all_jobsites(self, sample_jobsite_hours, sample_service_df):
-        """Builds invoices for all provided jobsites."""
-        jobsite_list = [sample_jobsite_hours]
-        invoices = build_all_invoices(jobsite_list, sample_service_df)
-
-        assert len(invoices) == 1
-        assert invoices[0].jobsite_id == "JS001"
-
-    def test_skips_zero_subtotal_invoices(self, zero_hours_jobsite):
-        """Skips invoices with zero subtotal."""
-        # Empty service df with proper dtypes
-        service_df = pd.DataFrame({
-            "JobsiteID": pd.Series([], dtype=str),
-            "Service_Activity": pd.Series([], dtype=str),
-            "Timesheet Qty": pd.Series([], dtype=float),
-            "Invoice Type": pd.Series([], dtype=str),
-            "Unit Price": pd.Series([], dtype=float),
-            "Total Price": pd.Series([], dtype=float),
-        })
-
-        invoices = build_all_invoices([zero_hours_jobsite], service_df)
-
-        assert len(invoices) == 0
-
-    def test_handles_multiple_jobsites(self, sample_service_df):
-        """Handles multiple jobsites correctly."""
-        jobsite1 = JobsiteHours(
-            jobsite_id="JS001",
-            jobsite_name="Site 1",
-            customer_name="Customer 1",
-            work_hours=1.0,
-            allocated_drive_time=0.0,
-            total_billable_hours=1.0,
-            billable_rate=75.0,
-            dates=["2026-01-15"],
-        )
-        jobsite2 = JobsiteHours(
-            jobsite_id="JS002",
-            jobsite_name="Site 2",
-            customer_name="Customer 2",
-            work_hours=2.0,
-            allocated_drive_time=0.0,
-            total_billable_hours=2.0,
-            billable_rate=75.0,
-            dates=["2026-01-16"],
-        )
-
-        invoices = build_all_invoices([jobsite1, jobsite2], sample_service_df)
-
-        assert len(invoices) == 2
-        jobsite_ids = [inv.jobsite_id for inv in invoices]
-        assert "JS001" in jobsite_ids
-        assert "JS002" in jobsite_ids
+def test_load_included_items_reads_config_file():
+    """Sanity check that the real config file loads with the expected names."""
+    items = load_included_items()
+    assert "GRUB-SPRING(VT)" in items
+    assert "MOW" in items
+    assert "Small Project" in items
+    assert len(items) == 10

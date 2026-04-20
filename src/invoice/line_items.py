@@ -1,14 +1,24 @@
-"""Build invoice line items from LMN data."""
+"""Build invoice line items from LMN Job History PDF rollups.
+
+Input shape: `JobsiteRollup` from src.calculations.allocation — one per jobsite,
+already aggregated across multiple days and augmented with allocated drive time.
+Services on the rollup carry `source_context` (date, foreman, notes) for the
+zero-price modal.
+"""
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional, List
+from pathlib import Path
+from typing import Iterable, Optional
 
-import pandas as pd
+from src.calculations.allocation import JobsiteRollup
+from src.parsing.pdf_parser import parse_money, parse_qty
 
-from src.calculations.time_calc import JobsiteHours
+
+INCLUDED_ITEMS_PATH = Path(__file__).resolve().parents[2] / "config" / "included_items.txt"
 
 
 @dataclass
@@ -30,177 +40,210 @@ class InvoiceData:
     customer_name: str
     invoice_date: str
     line_items: list[LineItem] = field(default_factory=list)
-    subtotal: float = 0
-    direct_payment_fee: float = 0
-    total: float = 0
-    timesheet_ids: list[str] = field(default_factory=list)
+    subtotal: float = 0.0
+    direct_payment_fee: float = 0.0
+    total: float = 0.0
     work_dates: list[str] = field(default_factory=list)
+    foremen: list[str] = field(default_factory=list)
+    # "<date>|<foreman>" strings — the canonical duplicate-detection key.
+    date_foreman_pairs: list[str] = field(default_factory=list)
+
+
+def load_included_items(path: Path = INCLUDED_ITEMS_PATH) -> frozenset[str]:
+    """Load the allow-list of bundled service names. Exact-match, case-sensitive."""
+    if not path.exists():
+        return frozenset()
+    items: set[str] = set()
+    for raw in path.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        items.add(line)
+    return frozenset(items)
 
 
 def calculate_direct_payment_fee(subtotal: float) -> float:
-    """
-    Calculate direct payment fee based on subtotal.
+    """Direct payment fee tiered by subtotal.
 
-    Fee tiers:
-    - Under $1,000 -> 10% of subtotal
-    - $1,000 - $2,000 -> $15 flat
-    - Over $2,000 -> $20 flat
+    Under $1,000 -> 10% of subtotal
+    $1,000 - $2,000 -> $15 flat
+    Over $2,000 -> $20 flat
     """
     if subtotal < 1000:
         return round(subtotal * 0.10, 2)
-    elif subtotal <= 2000:
+    if subtotal <= 2000:
         return 15.00
-    else:
-        return 20.00
+    return 20.00
 
 
-def format_labor_description(dates: list[str], task_summary: str = "") -> str:
-    """
-    Format the labor line item description.
+def format_labor_description(dates: list[str]) -> str:
+    """Build a human-readable labor line description from LMN date strings.
 
-    Format: "Skilled Garden Hourly Labor [date(s)] - [task summary]"
+    LMN date format: "Mon-Apr-13-2026". Output: "Skilled Garden Hourly Labor 4/13"
+    or "... 4/13-4/15" for ranges.
     """
     if not dates:
-        date_str = ""
-    elif len(dates) == 1:
-        # Single date - format as MM/DD
-        date_str = format_date_short(dates[0])
-    else:
-        # Multiple dates - show range
-        date_str = f"{format_date_short(dates[0])}-{format_date_short(dates[-1])}"
-
-    base = f"Skilled Garden Hourly Labor {date_str}".strip()
-
-    if task_summary:
-        return f"{base}- {task_summary}"
-    return base
+        return "Skilled Garden Hourly Labor"
+    shorts = [_short_date(d) for d in dates]
+    shorts = [s for s in shorts if s]
+    if not shorts:
+        return "Skilled Garden Hourly Labor"
+    if len(shorts) == 1:
+        return f"Skilled Garden Hourly Labor {shorts[0]}"
+    return f"Skilled Garden Hourly Labor {shorts[0]}-{shorts[-1]}"
 
 
-def format_date_short(date_str: str) -> str:
-    """Convert date string to MM/DD format."""
+def _short_date(lmn_date: str) -> str:
+    """Convert 'Mon-Apr-13-2026' to '4/13'. Returns '' on failure."""
     try:
-        dt = datetime.strptime(date_str, "%Y-%m-%d")
-        return dt.strftime("%-m/%d")
+        # Strip day-of-week prefix.
+        parts = lmn_date.split("-", 1)
+        if len(parts) != 2:
+            return ""
+        dt = datetime.strptime(parts[1], "%b-%d-%Y")
+        return f"{dt.month}/{dt.day}"
     except (ValueError, TypeError):
-        return date_str
+        return ""
+
+
+def _classify_service(description: str, total_price: float, included: frozenset[str]) -> str:
+    """Return one of: 'billable', 'included', 'zero_price'."""
+    if total_price > 0:
+        return "billable"
+    if description in included:
+        return "included"
+    return "zero_price"
 
 
 def extract_service_line_items(
-    service_df: pd.DataFrame, jobsite_id: str
+    services: Iterable[dict], included: frozenset[str]
 ) -> list[LineItem]:
-    """
-    Extract billable service/material line items for a jobsite.
+    """Dedupe billable services by description; sum quantities and totals."""
+    aggregated: "OrderedDict[str, LineItem]" = OrderedDict()
+    for svc in services:
+        desc = svc.get("description", "").strip()
+        if not desc:
+            continue
+        total = parse_money(svc.get("total_price", ""))
+        if _classify_service(desc, total, included) != "billable":
+            continue
 
-    Filters to items with Total Price > 0.
-    """
-    jobsite_services = service_df[service_df["JobsiteID"] == jobsite_id]
+        qty = parse_qty(svc.get("inv_qty", "")) or parse_qty(svc.get("act_qty", ""))
+        rate = parse_money(svc.get("rate", ""))
 
-    # Filter to billable items
-    billable = jobsite_services[jobsite_services["Total Price"] > 0]
-
-    line_items = []
-    for _, row in billable.iterrows():
-        line_items.append(
-            LineItem(
-                description=row["Service_Activity"],
-                quantity=row["Timesheet Qty"],
-                rate=row["Unit Price"],
-                amount=row["Total Price"],
+        existing = aggregated.get(desc)
+        if existing is None:
+            aggregated[desc] = LineItem(
+                description=desc,
+                quantity=qty,
+                rate=rate,
+                amount=round(total, 2),
             )
-        )
+        else:
+            existing.quantity = round(existing.quantity + qty, 4)
+            existing.amount = round(existing.amount + total, 2)
+            # Keep the first non-zero rate seen; don't overwrite.
+            if existing.rate == 0 and rate > 0:
+                existing.rate = rate
 
-    return line_items
+    return list(aggregated.values())
 
 
 def extract_zero_price_items(
-    service_df: pd.DataFrame, jobsite_id: str
+    services: Iterable[dict], included: frozenset[str]
 ) -> list[dict]:
-    """Extract service items with Unit Price = $0 that need user pricing."""
-    jobsite_services = service_df[service_df["JobsiteID"] == jobsite_id]
-    zero_price = jobsite_services[
-        (jobsite_services["Unit Price"] == 0)
-        & (jobsite_services["Timesheet Qty"] > 0)
-    ]
-    return [
-        {
-            "description": str(row["Service_Activity"]),
-            "quantity": float(row["Timesheet Qty"]),
-            "rate": 0.0,
-        }
-        for _, row in zero_price.iterrows()
-    ]
+    """Return service rows with Total Price = $0 whose name is NOT on the allow-list.
+
+    Items are NOT deduped — each crew entry is a distinct row the user may want
+    to evaluate individually, and each carries its own source_context.
+    """
+    out: list[dict] = []
+    for svc in services:
+        desc = svc.get("description", "").strip()
+        if not desc:
+            continue
+        total = parse_money(svc.get("total_price", ""))
+        if _classify_service(desc, total, included) != "zero_price":
+            continue
+
+        qty = parse_qty(svc.get("inv_qty", "")) or parse_qty(svc.get("act_qty", ""))
+        if qty <= 0:
+            # No quantity means nothing to bill — skip silently.
+            continue
+
+        out.append(
+            {
+                "description": desc,
+                "quantity": qty,
+                "rate": 0.0,
+                "source_context": dict(svc.get("source_context") or {}),
+            }
+        )
+    return out
 
 
 def build_invoice(
-    jobsite_hours: JobsiteHours,
-    service_df: pd.DataFrame,
+    rollup: JobsiteRollup,
+    included: frozenset[str],
     invoice_date: Optional[str] = None,
 ) -> InvoiceData:
-    """
-    Build complete invoice data for a jobsite.
-
-    Combines labor hours with materials/services and adds direct payment fee.
-    """
+    """Build a full InvoiceData for one jobsite."""
     if invoice_date is None:
         invoice_date = datetime.now().strftime("%Y-%m-%d")
 
+    pairs = sorted({f"{d}|{f}" for (d, f) in rollup.work_by_date_foreman})
     invoice = InvoiceData(
-        jobsite_id=jobsite_hours.jobsite_id,
-        jobsite_name=jobsite_hours.jobsite_name,
-        customer_name=jobsite_hours.customer_name,
+        jobsite_id=rollup.jobsite_id,
+        jobsite_name=rollup.customer_name,
+        customer_name=rollup.customer_name,
         invoice_date=invoice_date,
-        timesheet_ids=jobsite_hours.timesheet_ids or [],
-        work_dates=jobsite_hours.dates or [],
+        work_dates=list(rollup.work_dates),
+        foremen=list(rollup.foremen),
+        date_foreman_pairs=pairs,
     )
 
-    # Add labor line item (if there are billable hours)
-    if jobsite_hours.total_billable_hours > 0:
-        labor_amount = round(
-            jobsite_hours.total_billable_hours * jobsite_hours.billable_rate, 2
+    total_hours = rollup.total_billable_hours
+    rate = rollup.hourly_rate
+    if total_hours > 0 and rate > 0:
+        invoice.line_items.append(
+            LineItem(
+                description=format_labor_description(rollup.work_dates),
+                quantity=round(total_hours, 2),
+                rate=rate,
+                amount=round(total_hours * rate, 2),
+            )
         )
-        labor_item = LineItem(
-            description=format_labor_description(jobsite_hours.dates),
-            quantity=jobsite_hours.total_billable_hours,
-            rate=jobsite_hours.billable_rate,
-            amount=labor_amount,
-        )
-        invoice.line_items.append(labor_item)
 
-    # Add service/material line items
-    service_items = extract_service_line_items(service_df, jobsite_hours.jobsite_id)
-    invoice.line_items.extend(service_items)
+    invoice.line_items.extend(extract_service_line_items(rollup.services, included))
 
-    # Calculate totals
-    invoice.subtotal = round(sum(item.amount for item in invoice.line_items), 2)
+    invoice.subtotal = round(sum(i.amount for i in invoice.line_items), 2)
     invoice.direct_payment_fee = calculate_direct_payment_fee(invoice.subtotal)
     invoice.total = round(invoice.subtotal + invoice.direct_payment_fee, 2)
 
-    # Add fee as line item
     if invoice.direct_payment_fee > 0:
-        fee_item = LineItem(
-            description="Please subtract if paying by USPS check",
-            quantity=1,
-            rate=invoice.direct_payment_fee,
-            amount=invoice.direct_payment_fee,
+        invoice.line_items.append(
+            LineItem(
+                description="Please subtract if paying by USPS check",
+                quantity=1,
+                rate=invoice.direct_payment_fee,
+                amount=invoice.direct_payment_fee,
+            )
         )
-        invoice.line_items.append(fee_item)
 
     return invoice
 
 
 def build_all_invoices(
-    jobsite_hours_list: List[JobsiteHours],
-    service_df: pd.DataFrame,
+    rollups: Iterable[JobsiteRollup],
+    included: Optional[frozenset[str]] = None,
     invoice_date: Optional[str] = None,
-) -> List[InvoiceData]:
-    """Build invoices for all jobsites."""
-    invoices = []
-
-    for jobsite_hours in jobsite_hours_list:
-        invoice = build_invoice(jobsite_hours, service_df, invoice_date)
-
-        # Skip invoices with no line items (nothing to bill)
+) -> list[InvoiceData]:
+    """Build invoices for every jobsite rollup with a non-empty subtotal."""
+    if included is None:
+        included = load_included_items()
+    invoices: list[InvoiceData] = []
+    for rollup in rollups:
+        invoice = build_invoice(rollup, included, invoice_date)
         if invoice.subtotal > 0:
             invoices.append(invoice)
-
     return invoices

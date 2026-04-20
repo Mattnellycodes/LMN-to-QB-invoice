@@ -89,11 +89,12 @@ def create_draft_invoice(
         # Record invoice history for duplicate detection
         try:
             from src.db.invoice_history import record_invoice_creation
-            if invoice_id and invoice_data.timesheet_ids:
+            if invoice_id and invoice_data.date_foreman_pairs:
                 record_invoice_creation(
                     jobsite_id=invoice_data.jobsite_id,
-                    timesheet_ids=invoice_data.timesheet_ids,
                     work_dates=invoice_data.work_dates,
+                    foremen=invoice_data.foremen,
+                    date_foreman_pairs=invoice_data.date_foreman_pairs,
                     qbo_invoice_id=invoice_id,
                     qbo_invoice_number=invoice_number or "",
                     total_amount=total_amt,

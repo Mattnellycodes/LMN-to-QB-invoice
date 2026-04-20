@@ -1,0 +1,21 @@
+# Service names that are "Included" in a customer's package/contract price.
+# When these appear on LMN exports with Total Price = $0, they are silently
+# dropped from the invoice. Matching is EXACT, case-sensitive, on the full
+# service name as printed in the PDF's Services/Activities table.
+#
+# Any $0 service whose name is NOT on this list will be surfaced in the
+# zero-price modal so office staff can decide whether to skip, price it, or
+# add it here permanently.
+#
+# Lines starting with # are comments. Blank lines are ignored.
+
+General Garden Maintenance(VT)
+MOW
+GRUB-SPRING(VT)
+GRUB-FALL(VT)
+Annual Maintenance
+Lawn Service
+Noxious Weed Spray
+Return Service Call
+Small Project
+Tree Caging

@@ -97,6 +97,24 @@ def require_qbo_auth(f):
     return decorated_function
 
 
+@app.context_processor
+def inject_connection_status():
+    """Expose QBO and LMN connection status to every template for the header badges."""
+    from src.qbo.context import has_qbo_credentials
+
+    qbo_connected = bool(has_qbo_credentials())
+
+    lmn_connected = False
+    try:
+        from src.db.lmn_credentials import get_cached_token
+
+        lmn_connected = get_cached_token() is not None
+    except Exception:
+        lmn_connected = False
+
+    return {"qbo_connected": qbo_connected, "lmn_connected": lmn_connected}
+
+
 # =============================================================================
 # Health Check
 # =============================================================================
@@ -115,18 +133,19 @@ def health():
 
 @app.route("/")
 def index():
-    """Landing page with QuickBooks connection and invoice type selection."""
+    """Landing page with QuickBooks connection status."""
     from src.qbo.context import has_qbo_credentials
+
+    # Clear any lingering invoice_type from older sessions
+    session.pop("invoice_type", None)
 
     is_connected = has_qbo_credentials()
     realm_id = session.get("qbo_tokens", {}).get("realm_id") if is_connected else None
-    invoice_type = session.get("invoice_type")
 
     return render_template(
         "index.html",
         is_connected=is_connected,
         realm_id=realm_id,
-        invoice_type=invoice_type,
     )
 
 
@@ -240,27 +259,10 @@ def auth_status():
 
 
 # =============================================================================
-# Invoice Type Selection
-# =============================================================================
-
-
-@app.route("/select-type", methods=["POST"])
-def select_type():
-    """Store the selected invoice type (maintenance/irrigation) in session."""
-    invoice_type = request.form.get("invoice_type")
-    if invoice_type not in ("maintenance", "irrigation"):
-        flash("Please select an invoice type.", "warning")
-        return redirect(url_for("index"))
-
-    session["invoice_type"] = invoice_type
-    return redirect(url_for("upload"))
-
-
-# =============================================================================
 # File Upload & Processing
 # =============================================================================
 
-ALLOWED_EXTENSIONS = {".xlsx", ".xls", ".csv"}
+ALLOWED_EXTENSIONS = {".pdf"}
 
 
 def is_allowed_file(filename: str) -> bool:
@@ -272,83 +274,38 @@ def is_allowed_file(filename: str) -> bool:
 @app.route("/upload")
 @require_qbo_auth
 def upload():
-    """Page with drag-and-drop UI for uploading files."""
-    invoice_type = session.get("invoice_type")
-    return render_template("upload.html", invoice_type=invoice_type)
-
-
-@app.route("/upload/detect", methods=["POST"])
-@require_qbo_auth
-def upload_detect():
-    """AJAX endpoint for live file type detection preview."""
-    from src.web_processing import detect_uploaded_files
-
-    files = request.files.getlist("files")
-
-    if not files:
-        return jsonify({"files": [], "valid": False, "error": "No files uploaded"})
-
-    # Prepare files for detection
-    file_list = []
-    for f in files:
-        if f.filename and is_allowed_file(f.filename):
-            content = io.BytesIO(f.read())
-            file_list.append((f.filename, content))
-
-    if not file_list:
-        return jsonify(
-            {
-                "files": [],
-                "valid": False,
-                "error": "No valid files. Please upload .xlsx, .xls, or .csv files.",
-            }
-        )
-
-    result = detect_uploaded_files(file_list)
-    return jsonify(result)
+    """Page with drag-and-drop UI for uploading the LMN Job History PDF."""
+    return render_template("upload.html")
 
 
 @app.route("/upload", methods=["POST"])
 @require_qbo_auth
 def upload_post():
-    """Process uploaded files (CSV or Excel)."""
-    from src.web_processing import process_uploaded_files, ProcessingError
+    """Process the uploaded LMN Job History PDF."""
+    from src.web_processing import process_uploaded_pdf, ProcessingError
 
-    files = request.files.getlist("files")
+    pdf_file = request.files.get("pdf_file")
 
-    if not files or not any(f.filename for f in files):
-        flash("Please upload Time Data and Service Data files.", "error")
+    if not pdf_file or not pdf_file.filename:
+        flash("Please upload the LMN Job History PDF.", "error")
         return redirect(url_for("upload"))
 
-    # Filter to allowed files and prepare for processing
-    file_list = []
-    for f in files:
-        if f.filename and is_allowed_file(f.filename):
-            content = io.BytesIO(f.read())
-            file_list.append((f.filename, content))
-
-    if len(file_list) < 2:
-        flash(
-            "Please upload both Time Data and Service Data files (.xlsx, .xls, or .csv).",
-            "error",
-        )
+    if not is_allowed_file(pdf_file.filename):
+        flash("Upload must be a .pdf file.", "error")
         return redirect(url_for("upload"))
 
     try:
-        result = process_uploaded_files(file_list)
+        content = io.BytesIO(pdf_file.read())
+        result = process_uploaded_pdf(pdf_file.filename, content)
 
-        # Store result in session for next steps
         session["processing_result"] = result
 
-        # Check for unmapped jobsites
         if result.get("unmapped_jobsites"):
             return redirect(url_for("mapping"))
-
-        # All mapped - go to results
         return redirect(url_for("results"))
 
     except ProcessingError as e:
-        flash(f"Error processing files: {e}", "error")
+        flash(f"Error processing PDF: {e}", "error")
         return redirect(url_for("upload"))
     except Exception as e:
         logger.exception("Unexpected error processing files")
