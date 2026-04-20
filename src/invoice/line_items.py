@@ -224,12 +224,16 @@ def build_invoice(
     total_hours = rollup.total_billable_hours
     rate = rollup.hourly_rate
     if total_hours > 0 and rate > 0:
+        # Derive Amount from the rounded Qty so QBO's Amount == UnitPrice*Qty
+        # validation passes. Computing Amount from the raw hours while sending
+        # a rounded Qty causes rejection when fractional hours are involved.
+        qty = round(total_hours, 2)
         invoice.line_items.append(
             LineItem(
                 description=format_labor_description(rollup.work_dates),
-                quantity=round(total_hours, 2),
+                quantity=qty,
                 rate=rate,
-                amount=round(total_hours * rate, 2),
+                amount=round(qty * rate, 2),
                 item_lookup_name=rollup.hourly_rate_name,
             )
         )
