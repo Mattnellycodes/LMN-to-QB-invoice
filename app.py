@@ -627,7 +627,7 @@ def update_zero_price_items():
         )
 
     # Update invoices in session
-    fee_description = "Please subtract if paying by USPS check"
+    fee_description = "Direct Payment Fee (Subtract if paying by USPS check)"
     for inv in result["invoices"]:
         jobsite_id = inv["jobsite_id"]
         if jobsite_id not in new_line_items_by_jobsite:

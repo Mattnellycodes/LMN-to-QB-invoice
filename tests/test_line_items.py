@@ -223,5 +223,5 @@ def test_fee_line_has_stable_item_lookup_name():
 
     inv = build_invoice(rollup, INCLUDED, invoice_date="2026-04-19")
     fee = next(li for li in inv.line_items
-               if li.description == "Please subtract if paying by USPS check")
+               if li.description == "Direct Payment Fee (Subtract if paying by USPS check)")
     assert fee.item_lookup_name == "Direct Payment Fee"

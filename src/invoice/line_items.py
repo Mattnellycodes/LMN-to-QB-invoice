@@ -247,7 +247,7 @@ def build_invoice(
     if invoice.direct_payment_fee > 0:
         invoice.line_items.append(
             LineItem(
-                description="Please subtract if paying by USPS check",
+                description="Direct Payment Fee (Subtract if paying by USPS check)",
                 quantity=1,
                 rate=invoice.direct_payment_fee,
                 amount=invoice.direct_payment_fee,
