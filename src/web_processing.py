@@ -250,7 +250,18 @@ def create_qbo_invoices(
     or QBO will reject the invoice; the fallback `"Other"` ItemRef covers
     unmatched names.
     """
+    from src.qbo.classes import DEFAULT_CLASS_NAME, ClassMappingError, get_class_by_name
+    from src.qbo.context import get_qbo_credentials
     from src.qbo.invoices import create_draft_invoice
+
+    access_token, realm_id = get_qbo_credentials()
+    class_ref = get_class_by_name(access_token, realm_id, DEFAULT_CLASS_NAME)
+    if class_ref is None:
+        raise ClassMappingError(
+            f"QBO Class named '{DEFAULT_CLASS_NAME}' is required on every "
+            "invoice line. Create it in QuickBooks (Settings → All Lists → "
+            "Classes) before creating invoices."
+        )
 
     results: list[dict] = []
 
@@ -282,6 +293,7 @@ def create_qbo_invoices(
             invoice,
             qbo_customer_id=inv_dict["qbo_customer_id"],
             item_refs=item_refs,
+            class_ref=class_ref,
         )
 
         results.append(

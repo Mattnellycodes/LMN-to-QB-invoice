@@ -30,6 +30,7 @@ def create_draft_invoice(
     invoice_data: InvoiceData,
     qbo_customer_id: str,
     item_refs: Dict[str, Dict[str, str]],
+    class_ref: Optional[Dict[str, str]] = None,
     terms: str = "Net 15",
 ) -> InvoiceResult:
     """
@@ -41,6 +42,8 @@ def create_draft_invoice(
         item_refs: Map of `item_lookup_name` -> QBO ItemRef. Every line's
             lookup name must resolve (unmatched names use the pre-fetched
             fallback ItemRef) — QBO rejects invoice lines missing ItemRef.
+        class_ref: Optional QBO ClassRef applied to every line. Requires
+            ClassTrackingPerTxnLine preference enabled on the company.
         terms: Payment terms (default Net 15)
 
     Returns:
@@ -56,7 +59,7 @@ def create_draft_invoice(
     qbo_lines = []
     for i, item in enumerate(invoice_data.line_items, start=1):
         ref = item_refs.get(item.item_lookup_name)
-        qbo_line = build_qbo_line_item(item, i, ref)
+        qbo_line = build_qbo_line_item(item, i, ref, class_ref=class_ref)
         qbo_lines.append(qbo_line)
 
     # Build invoice payload
@@ -142,7 +145,12 @@ def create_draft_invoice(
         )
 
 
-def build_qbo_line_item(item: LineItem, line_num: int, item_ref: Optional[Dict]) -> Dict:
+def build_qbo_line_item(
+    item: LineItem,
+    line_num: int,
+    item_ref: Optional[Dict],
+    class_ref: Optional[Dict[str, str]] = None,
+) -> Dict:
     """
     Build a QBO API line item from our LineItem.
 
@@ -161,6 +169,9 @@ def build_qbo_line_item(item: LineItem, line_num: int, item_ref: Optional[Dict])
 
     if item_ref:
         line["SalesItemLineDetail"]["ItemRef"] = item_ref
+
+    if class_ref:
+        line["SalesItemLineDetail"]["ClassRef"] = class_ref
 
     return line
 

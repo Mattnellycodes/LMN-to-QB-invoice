@@ -191,6 +191,7 @@
                 <tr>
                     <th>Description</th>
                     <th>QBO Product/Service</th>
+                    <th>Class</th>
                     <th class="text-right">Qty</th>
                     <th class="text-right">Rate</th>
                     <th class="text-right">Amount</th>
@@ -211,6 +212,7 @@
                             <em class="text-muted">&mdash;</em>
                         {% endif %}
                     </td>
+                    <td>Maintenance</td>
                     <td class="text-right">{{ "%.2f"|format(item.quantity) }}</td>
                     <td class="text-right">${{ "%.2f"|format(item.rate) }}</td>
                     <td class="text-right">${{ "%.2f"|format(item.amount) }}</td>
