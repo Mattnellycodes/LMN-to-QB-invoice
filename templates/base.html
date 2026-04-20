@@ -4,223 +4,66 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}LMN to QuickBooks{% endblock %}</title>
-    <style>
-        * {
-            box-sizing: border-box;
-        }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-            line-height: 1.6;
-            max-width: 900px;
-            margin: 0 auto;
-            padding: 20px;
-            background: #f5f5f5;
-            color: #333;
-        }
-        h1, h2, h3 {
-            color: #2c3e50;
-        }
-        .container {
-            background: white;
-            padding: 30px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        .btn {
-            display: inline-block;
-            padding: 12px 24px;
-            background: #3498db;
-            color: white;
-            text-decoration: none;
-            border-radius: 6px;
-            border: none;
-            cursor: pointer;
-            font-size: 16px;
-            transition: background 0.2s;
-        }
-        .btn:hover {
-            background: #2980b9;
-        }
-        .btn-success {
-            background: #27ae60;
-        }
-        .btn-success:hover {
-            background: #219a52;
-        }
-        .btn-danger {
-            background: #e74c3c;
-        }
-        .btn-danger:hover {
-            background: #c0392b;
-        }
-        .btn-secondary {
-            background: #95a5a6;
-        }
-        .btn-secondary:hover {
-            background: #7f8c8d;
-        }
-        .flash {
-            padding: 15px;
-            margin-bottom: 20px;
-            border-radius: 6px;
-        }
-        .flash.success {
-            background: #d4edda;
-            color: #155724;
-            border: 1px solid #c3e6cb;
-        }
-        .flash.error {
-            background: #f8d7da;
-            color: #721c24;
-            border: 1px solid #f5c6cb;
-        }
-        .flash.warning {
-            background: #fff3cd;
-            color: #856404;
-            border: 1px solid #ffeeba;
-        }
-        .flash.info {
-            background: #d1ecf1;
-            color: #0c5460;
-            border: 1px solid #bee5eb;
-        }
-        .status-badge {
-            display: inline-block;
-            padding: 4px 12px;
-            border-radius: 20px;
-            font-size: 14px;
-            font-weight: 500;
-        }
-        .status-connected {
-            background: #d4edda;
-            color: #155724;
-        }
-        .status-disconnected {
-            background: #f8d7da;
-            color: #721c24;
-        }
-        nav {
-            margin-bottom: 20px;
-            padding-bottom: 10px;
-            border-bottom: 1px solid #ddd;
-        }
-        nav a {
-            margin-right: 15px;
-            color: #3498db;
-            text-decoration: none;
-        }
-        nav a:hover {
-            text-decoration: underline;
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin: 20px 0;
-        }
-        th, td {
-            padding: 12px;
-            text-align: left;
-            border-bottom: 1px solid #ddd;
-        }
-        th {
-            background: #f8f9fa;
-            font-weight: 600;
-        }
-        tr:hover {
-            background: #f8f9fa;
-        }
-        .text-right {
-            text-align: right;
-        }
-        .text-muted {
-            color: #6c757d;
-        }
-        .mt-20 {
-            margin-top: 20px;
-        }
-        .mb-20 {
-            margin-bottom: 20px;
-        }
-        .type-cards {
-            display: flex;
-            gap: 20px;
-            margin-top: 10px;
-        }
-        .type-card-form {
-            flex: 1;
-        }
-        .type-card {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            width: 100%;
-            padding: 30px 20px;
-            border: 2px solid #ddd;
-            border-radius: 12px;
-            background: white;
-            cursor: pointer;
-            transition: border-color 0.2s, box-shadow 0.2s, transform 0.1s;
-            font-family: inherit;
-        }
-        .type-card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-        }
-        .type-card-maintenance {
-            border-color: #27ae60;
-        }
-        .type-card-maintenance:hover {
-            background: #f0faf4;
-            box-shadow: 0 4px 12px rgba(39,174,96,0.2);
-        }
-        .type-card-irrigation {
-            border-color: #3498db;
-        }
-        .type-card-irrigation:hover {
-            background: #f0f7fd;
-            box-shadow: 0 4px 12px rgba(52,152,219,0.2);
-        }
-        .type-card-active {
-            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-            transform: translateY(-2px);
-        }
-        .type-card-active.type-card-maintenance {
-            background: #d4edda;
-        }
-        .type-card-active.type-card-irrigation {
-            background: #d1ecf1;
-        }
-        .type-card-title {
-            font-size: 22px;
-            font-weight: 600;
-            color: #2c3e50;
-            margin-bottom: 6px;
-        }
-        .type-card-desc {
-            font-size: 14px;
-            color: #6c757d;
-        }
-    </style>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700&family=Open+Sans:wght@400;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
     {% block head %}{% endblock %}
 </head>
 <body>
-    <nav>
-        <a href="{{ url_for('index') }}">Home</a>
-        <a href="{{ url_for('upload') }}">Upload Files</a>
-    </nav>
+    <header class="site-header">
+        <div class="site-header-inner">
+            <a href="{{ url_for('index') }}" aria-label="Valley of the Flowers Landscaping">
+                <img src="{{ url_for('static', filename='img/logo.png') }}" alt="Valley of the Flowers Landscaping" class="logo">
+            </a>
+            <nav class="site-nav">
+                <a href="{{ url_for('index') }}">Home</a>
+                <a href="{{ url_for('upload') }}">Upload Files</a>
+            </nav>
+            <div class="header-badges">
+                <span class="conn-badge {% if qbo_connected %}is-on{% else %}is-off{% endif %}" title="QuickBooks connection">
+                    <span class="dot"></span>
+                    QuickBooks
+                </span>
+                <span class="conn-badge {% if lmn_connected %}is-on{% else %}is-off{% endif %}" title="LMN connection">
+                    <span class="dot"></span>
+                    LMN
+                </span>
+            </div>
+        </div>
+    </header>
 
-    {% with messages = get_flashed_messages(with_categories=true) %}
-        {% if messages %}
-            {% for category, message in messages %}
-                <div class="flash {{ category }}">{{ message }}</div>
-            {% endfor %}
-        {% endif %}
-    {% endwith %}
+    <main class="page">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="flash {{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
 
-    <div class="container">
-        {% block content %}{% endblock %}
-    </div>
+        <div class="container">
+            {% block content %}{% endblock %}
+        </div>
+    </main>
+
+    <footer class="site-footer">
+        <svg class="site-footer-divider" viewBox="0 0 960 36" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none" aria-hidden="true">
+            <g fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M0 30 L960 30" />
+                <path d="M40 30 C 50 18, 60 18, 70 30 M55 30 L55 12" />
+                <path d="M150 30 C 160 20, 170 20, 180 30 M165 30 L165 14 M158 20 L165 14 M172 20 L165 14" />
+                <path d="M300 30 C 312 16, 324 16, 336 30 M318 30 L318 10" />
+                <path d="M450 30 C 458 22, 466 22, 474 30 M462 30 L462 16 M455 22 L462 18 M469 22 L462 18" />
+                <path d="M600 30 C 612 16, 624 16, 636 30 M618 30 L618 10 M610 18 L618 14 M626 18 L618 14" />
+                <path d="M760 30 C 770 20, 780 20, 790 30 M775 30 L775 14" />
+                <path d="M880 30 C 890 18, 900 18, 910 30 M895 30 L895 12 M888 20 L895 16 M902 20 L895 16" />
+            </g>
+        </svg>
+        <div class="site-footer-inner">
+            &copy; Valley of the Flowers Landscaping, Inc.
+        </div>
+    </footer>
 
     {% block scripts %}{% endblock %}
 </body>

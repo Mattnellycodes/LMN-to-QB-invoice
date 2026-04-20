@@ -9,53 +9,35 @@
 
 <h2>QuickBooks Connection</h2>
 
-<div class="mb-20">
+<div class="home-connection">
     {% if is_connected %}
         <span class="status-badge status-connected">Connected</span>
-        <span class="text-muted" style="margin-left: 10px;">Company ID: {{ realm_id }}</span>
+        <span class="realm">Company ID: {{ realm_id }}</span>
     {% else %}
         <span class="status-badge status-disconnected">Not Connected</span>
     {% endif %}
 </div>
 
 {% if is_connected %}
-    <p>You're connected to QuickBooks Online. Select an invoice type to get started.</p>
-    <div class="mt-20" style="margin-bottom: 10px;">
-        <a href="{{ url_for('qbo_disconnect') }}" class="btn btn-secondary" style="font-size: 14px;">Disconnect</a>
-    </div>
-
-    <h2 class="mt-20">Invoice Type</h2>
-    <div class="type-cards">
-        <form action="{{ url_for('select_type') }}" method="post" class="type-card-form">
-            <input type="hidden" name="invoice_type" value="maintenance">
-            <button type="submit" class="type-card type-card-maintenance {% if invoice_type == 'maintenance' %}type-card-active{% endif %}">
-                <span class="type-card-title">Maintenance</span>
-                <span class="type-card-desc">Grounds maintenance invoices</span>
-            </button>
-        </form>
-        <form action="{{ url_for('select_type') }}" method="post" class="type-card-form">
-            <input type="hidden" name="invoice_type" value="irrigation">
-            <button type="submit" class="type-card type-card-irrigation {% if invoice_type == 'irrigation' %}type-card-active{% endif %}">
-                <span class="type-card-title">Irrigation</span>
-                <span class="type-card-desc">Irrigation service invoices</span>
-            </button>
-        </form>
+    <p>You're connected to QuickBooks Online. Start by uploading your LMN exports.</p>
+    <div class="home-actions">
+        <a href="{{ url_for('upload') }}" class="btn">Upload Files</a>
+        <a href="{{ url_for('qbo_disconnect') }}" class="btn btn-secondary">Disconnect</a>
     </div>
 {% else %}
     <p>Connect to QuickBooks Online to start creating invoices.</p>
-    <div class="mt-20">
+    <div class="home-actions">
         <a href="{{ url_for('qbo_authorize') }}" class="btn">Connect to QuickBooks</a>
     </div>
 {% endif %}
 
-<h2 class="mt-20">How It Works</h2>
-<ol>
-    <li><strong>Connect</strong> - Authorize access to your QuickBooks Online account</li>
-    <li><strong>Select Type</strong> - Choose Maintenance or Irrigation</li>
-    <li><strong>Upload</strong> - Upload your LMN Time Data and Service Data exports (.xlsx or .csv)</li>
-    <li><strong>Map</strong> - Match any new jobsites to QuickBooks customers</li>
-    <li><strong>Review</strong> - Preview invoices before creating them</li>
-    <li><strong>Create</strong> - Create draft invoices in QuickBooks for final review</li>
+<h2>How It Works</h2>
+<ol class="home-steps">
+    <li><strong>Connect</strong> &mdash; Authorize access to your QuickBooks Online account</li>
+    <li><strong>Upload</strong> &mdash; Upload your LMN Time Data and Service Data exports (.xlsx or .csv)</li>
+    <li><strong>Map</strong> &mdash; Match any new jobsites to QuickBooks customers</li>
+    <li><strong>Review</strong> &mdash; Preview invoices before creating them</li>
+    <li><strong>Create</strong> &mdash; Create draft invoices in QuickBooks for final review</li>
 </ol>
 <p class="mt-20">
     <a href="https://docs.google.com/document/d/1J_hYbSsxYORKLG77RrbUNZY6MmxMTLKOCaqxqx5VHog/edit?usp=sharing" target="_blank">View detailed instructions</a>
