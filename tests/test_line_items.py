@@ -188,6 +188,30 @@ def test_labor_line_uses_rate_name_as_lookup_description_preserved():
     assert labor.item_lookup_name == "Maintenance Skilled Hourly Labor - TOWN"
 
 
+def test_labor_line_amount_matches_rounded_qty_times_rate():
+    """Regression: QBO rejects with 'Amount is not equal to UnitPrice * Qty'
+    when Amount is computed from raw hours but Qty is rounded. Both must
+    derive from the same rounded value.
+    """
+    rollup = JobsiteRollup(
+        jobsite_id="5843897W",
+        customer_name="Brannin McBee and Meghan Bennett",
+        hourly_rate=75.0,
+        hourly_rate_name="Maintenance Skilled Hourly Labor - TOWN",
+    )
+    # 12.9450666... hours is the value that exposed the rounding mismatch:
+    # old code sent Qty=12.95 but Amount=round(12.9450666*75, 2)=970.88,
+    # while QBO computed 12.95*75=971.25.
+    rollup.work_by_date_foreman[("Mon-Apr-13-2026", "Jenna")] = 12.9450666
+
+    inv = build_invoice(rollup, INCLUDED, invoice_date="2026-04-19")
+    labor = inv.line_items[0]
+
+    assert labor.quantity == 12.95
+    assert labor.amount == round(labor.quantity * labor.rate, 2)
+    assert labor.amount == 971.25
+
+
 def test_fee_line_has_stable_item_lookup_name():
     rollup = JobsiteRollup(
         jobsite_id="ABC",
