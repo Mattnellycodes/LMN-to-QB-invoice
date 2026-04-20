@@ -74,6 +74,7 @@ def test_parse_from_bytes():
     assert SHOP_JOBSITE_ID in report.customers
 
 
-def test_missing_shop_raises():
+def test_unreadable_pdf_raises():
+    """Non-PDF bytes still raise — we only relaxed the *SHOP-presence check."""
     with pytest.raises(PdfParseError):
         parse_pdf(b"%PDF-1.4\n%% not a real pdf\n")

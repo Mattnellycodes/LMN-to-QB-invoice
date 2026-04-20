@@ -20,7 +20,7 @@ from src.mapping.customer_mapping import (
     load_mapping_from_lmn_api,
 )
 from src.mapping.item_mapping import build_item_refs
-from src.parsing.pdf_parser import PdfParseError, parse_pdf
+from src.parsing.pdf_parser import SHOP_JOBSITE_ID, PdfParseError, parse_pdf
 
 
 class ProcessingError(Exception):
@@ -75,6 +75,9 @@ def process_uploaded_pdf(filename: str, content: BytesIO) -> Dict[str, Any]:
         raise ProcessingError(f"Could not read PDF: {e}")
 
     allocation = compute(report)
+    shop_missing = (
+        SHOP_JOBSITE_ID not in report.customers or not allocation.shop_pool
+    )
     included = load_included_items()
     invoice_date = datetime.now().strftime("%Y-%m-%d")
     invoices = build_all_invoices(
@@ -136,6 +139,7 @@ def process_uploaded_pdf(filename: str, content: BytesIO) -> Dict[str, Any]:
         "item_refs": item_refs,
         "fallback_lookup_names": fallback_lookup_names,
         "fallback_error": fallback_error,
+        "shop_missing": shop_missing,
         "summary": {
             "total_jobsites": len(invoices),
             "mapped_jobsites": mapped_count,
