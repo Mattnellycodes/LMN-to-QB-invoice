@@ -364,11 +364,9 @@ def _is_boilerplate(s: str, page_idx: int, total_pages: int) -> bool:
 
 
 def _validate(report: ParsedReport) -> None:
-    if SHOP_JOBSITE_ID not in report.customers:
-        raise PdfParseError(
-            f"*SHOP jobsite ({SHOP_JOBSITE_ID}) not found in PDF. "
-            "Is this an LMN 'Job History (All Details)' report with the T-Town group?"
-        )
+    # *SHOP is optional — reports for groups/date-ranges without shop activity
+    # are still valid; callers can detect its absence and warn that no drive
+    # time will be allocated.
     if not report.tasks:
         raise PdfParseError("No tasks parsed from PDF.")
 

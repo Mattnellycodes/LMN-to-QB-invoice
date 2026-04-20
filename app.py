@@ -564,6 +564,7 @@ def results():
         "lmn_mapping_count": lmn_mapping_count,
         "fallback_lookup_names": result.get("fallback_lookup_names", []),
         "fallback_error": result.get("fallback_error"),
+        "shop_missing": result.get("shop_missing", False),
         "summary": {
             "total_jobsites": len(all_invoices),
             "mapped_jobsites": len(mapped_invoices),
@@ -592,6 +593,8 @@ def update_zero_price_items():
         return redirect(url_for("results"))
 
     # Parse and validate submitted prices
+    from src.invoice.line_items import strip_unit_marker
+
     new_line_items_by_jobsite = {}
     for item in zero_price_items:
         idx = item["index"]
@@ -617,7 +620,7 @@ def update_zero_price_items():
                 "quantity": quantity,
                 "rate": rate,
                 "amount": amount,
-                "item_lookup_name": description,
+                "item_lookup_name": strip_unit_marker(description),
                 "qbo_item_name": None,
                 "uses_fallback": False,
             }

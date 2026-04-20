@@ -75,6 +75,14 @@
 </div>
 {% endif %}
 
+{% if result.shop_missing %}
+<div class="flash warning">
+    <strong>No *SHOP activity in this PDF.</strong>
+    Drive/overhead time (CostCode 900) is not included, so invoices will only bill on-site work hours.
+    If this week had shop time, re-export the LMN report with the shop job included.
+</div>
+{% endif %}
+
 {% if result.fallback_error %}
 <div class="flash error">
     <strong>Can't create invoices:</strong> {{ result.fallback_error }}
