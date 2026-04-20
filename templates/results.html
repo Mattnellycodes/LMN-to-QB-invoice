@@ -2,91 +2,6 @@
 
 {% block title %}Invoice Preview{% endblock %}
 
-{% block head %}
-<style>
-    .modal-overlay {
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        background: rgba(0, 0, 0, 0.6);
-        z-index: 1000;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-    }
-    .modal-card {
-        background: white;
-        border-radius: 12px;
-        padding: 30px;
-        max-width: 800px;
-        width: 90%;
-        max-height: 85vh;
-        overflow-y: auto;
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-    }
-    .modal-card h2 {
-        margin-top: 0;
-        margin-bottom: 5px;
-    }
-    .modal-card .subtitle {
-        color: #666;
-        margin-bottom: 20px;
-    }
-    .zero-price-group {
-        margin-bottom: 20px;
-        padding: 15px;
-        background: #f8f9fa;
-        border-radius: 8px;
-    }
-    .zero-price-group h4 {
-        margin: 0 0 12px 0;
-        color: #2c3e50;
-    }
-    .zero-price-row {
-        display: grid;
-        grid-template-columns: 2fr 1fr 1fr;
-        gap: 10px;
-        margin-bottom: 10px;
-        align-items: end;
-    }
-    .zero-price-row label {
-        display: block;
-        font-size: 0.85em;
-        color: #555;
-        margin-bottom: 4px;
-    }
-    .zero-price-row input {
-        width: 100%;
-        padding: 8px 10px;
-        border: 1px solid #ccc;
-        border-radius: 4px;
-        font-size: 14px;
-        box-sizing: border-box;
-    }
-    .zero-price-row input:focus {
-        border-color: #3498db;
-        outline: none;
-        box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
-    }
-    .zero-price-row input.error {
-        border-color: #e74c3c;
-        box-shadow: 0 0 0 2px rgba(231, 76, 60, 0.2);
-    }
-    .error-message {
-        color: #e74c3c;
-        font-size: 0.85em;
-        margin-top: 4px;
-        display: none;
-    }
-    .modal-actions {
-        margin-top: 20px;
-        text-align: right;
-    }
-</style>
-{% endblock %}
-
 {% block content %}
 {% if result.zero_price_items %}
 <div class="modal-overlay" id="zeroPriceModal">
@@ -103,19 +18,37 @@
                     <h4>{{ item.customer_name }} &mdash; {{ item.jobsite_name }}</h4>
                 {% endif %}
                 <div class="zero-price-row">
-                    <div>
-                        <label>Description</label>
-                        <input type="text" name="description_{{ item.index }}" value="{{ item.description }}" required>
+                    {% if item.source_context %}
+                    <div class="zero-price-context">
+                        <div class="zero-price-context-meta">
+                            <strong>From:</strong> {{ item.source_context.date or '(date unknown)' }}
+                            &nbsp;&mdash;&nbsp;
+                            <strong>Foreman:</strong> {{ item.source_context.foreman or '(unknown)' }}
+                        </div>
+                        <div class="zero-price-context-notes">
+                            {% if item.source_context.notes %}
+                                <strong>Notes:</strong> {{ item.source_context.notes }}
+                            {% else %}
+                                <em class="text-muted">No notes recorded by crew</em>
+                            {% endif %}
+                        </div>
                     </div>
-                    <div>
-                        <label>Quantity</label>
-                        <input type="number" name="quantity_{{ item.index }}" value="{{ item.quantity }}" step="any" min="0.01" required>
-                    </div>
-                    <div>
-                        <label>Price ($)</label>
-                        <input type="number" name="rate_{{ item.index }}" step="any" min="0.01" required
-                               placeholder="0.00" class="rate-input">
-                        <div class="error-message">Price must be greater than $0</div>
+                    {% endif %}
+                    <div class="zero-price-inputs">
+                        <div>
+                            <label>Description</label>
+                            <input type="text" name="description_{{ item.index }}" value="{{ item.description }}" required>
+                        </div>
+                        <div>
+                            <label>Quantity</label>
+                            <input type="number" name="quantity_{{ item.index }}" value="{{ item.quantity }}" step="any" min="0.01" required>
+                        </div>
+                        <div>
+                            <label>Price ($)</label>
+                            <input type="number" name="rate_{{ item.index }}" step="any" min="0.01" required
+                                   placeholder="0.00" class="rate-input">
+                            <div class="error-message">Price must be greater than $0</div>
+                        </div>
                     </div>
                 </div>
             {% endfor %}
@@ -131,7 +64,7 @@
 <h1>Invoice Preview</h1>
 
 {% if result.lmn_mapping_count %}
-<div class="flash success" style="margin-bottom: 15px;">
+<div class="flash success">
     Loaded {{ result.lmn_mapping_count }} customer mappings from LMN
 </div>
 {% endif %}
@@ -144,18 +77,22 @@
 
 {% if result.duplicates %}
 <div class="flash warning">
-    <strong>Warning: {{ result.duplicates|length }} timesheet(s) already invoiced</strong>
-    <details style="margin-top: 10px;">
-        <summary style="cursor: pointer;">View details</summary>
-        <table style="margin-top: 10px; font-size: 0.9em;">
+    <strong>Warning: {{ result.duplicates|length }} jobsite(s) overlap prior invoices</strong>
+    <details class="mt-20">
+        <summary>View details</summary>
+        <table>
             <thead>
-                <tr><th>Customer</th><th>Timesheet</th><th>Invoice #</th><th>Created</th></tr>
+                <tr><th>Customer</th><th>Conflicting (Date, Foreman)</th><th>Prior Invoice #</th><th>Created</th></tr>
             </thead>
             <tbody>
                 {% for dup in result.duplicates %}
                 <tr>
                     <td>{{ dup.customer_name }}</td>
-                    <td>{{ dup.timesheet_id }}</td>
+                    <td>
+                        {% for pair in dup.overlapping_pairs %}
+                            <div>{{ pair.replace('|', ' — ') }}</div>
+                        {% endfor %}
+                    </td>
                     <td>{{ dup.qbo_invoice_number }}</td>
                     <td>{{ dup.created_at[:10] if dup.created_at else '-' }}</td>
                 </tr>
@@ -179,10 +116,10 @@
 </table>
 
 {% if result.invoices %}
-<details class="mt-20" open>
-    <summary style="cursor: pointer; font-weight: 500; font-size: 1.1em;">Customer Mapping Verification</summary>
-    <p style="margin: 10px 0; color: #666;">Confirm LMN customers are mapped to the correct QuickBooks customers:</p>
-    <table style="margin-bottom: 20px;">
+<details class="mt-20 map-verify" open>
+    <summary>Customer Mapping Verification</summary>
+    <p class="text-muted">Confirm LMN customers are mapped to the correct QuickBooks customers:</p>
+    <table>
         <thead>
             <tr>
                 <th>LMN Customer</th>
@@ -195,8 +132,8 @@
             {% for invoice in result.invoices %}
             <tr>
                 <td>{{ invoice.customer_name }}</td>
-                <td style="text-align: center;">→</td>
-                <td style="color: {% if invoice.qbo_display_name %}#28a745{% else %}#dc3545{% endif %};">
+                <td class="text-right">→</td>
+                <td class="{% if invoice.qbo_display_name %}ok{% else %}missing{% endif %}">
                     {{ invoice.qbo_display_name or '(NOT MAPPED)' }}
                 </td>
                 <td>{{ invoice.qbo_customer_id or '-' }}</td>
@@ -234,9 +171,9 @@
 </table>
 
 <details class="mt-20">
-    <summary style="cursor: pointer; font-weight: 500;">View Line Item Details</summary>
+    <summary>View Line Item Details</summary>
     {% for invoice in result.invoices %}
-    <div style="margin: 20px 0; padding: 15px; background: #f8f9fa; border-radius: 8px;">
+    <div class="invoice-detail-card">
         <h4>{{ invoice.qbo_display_name or invoice.customer_name }} - {{ invoice.jobsite_name }}</h4>
         <table>
             <thead>
@@ -264,15 +201,17 @@
 
 <form action="{{ url_for('create_invoices') }}" method="post" class="mt-20">
     {% if result.duplicate_jobsite_ids %}
-    <div style="margin-bottom: 15px; padding: 10px; background: #fff3cd; border-radius: 4px;">
-        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+    <div class="duplicate-skip">
+        <label>
             <input type="checkbox" name="skip_duplicates" value="1" checked>
             <span>Skip {{ result.duplicate_jobsite_ids|length }} jobsite(s) with already-invoiced timesheets</span>
         </label>
     </div>
     {% endif %}
-    <button type="submit" class="btn btn-success">Create Draft Invoices in QuickBooks</button>
-    <a href="{{ url_for('upload') }}" class="btn btn-secondary" style="margin-left: 10px;">Start Over</a>
+    <div class="home-actions">
+        <button type="submit" class="btn btn-success">Create Draft Invoices in QuickBooks</button>
+        <a href="{{ url_for('upload') }}" class="btn btn-secondary">Start Over</a>
+    </div>
 </form>
 
 {% else %}

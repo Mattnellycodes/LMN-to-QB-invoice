@@ -57,30 +57,30 @@ def init_db() -> None:
             )
         """)
 
-        # Invoice history table - tracks which timesheets have been invoiced
+        # Invoice history table — tracks (jobsite, date, foreman) triples
+        # already invoiced to QBO. date_foreman_pairs stores "date|foreman"
+        # strings enabling GIN-indexed overlap queries for duplicate detection.
+        cursor.execute("DROP TABLE IF EXISTS invoice_history")
         cursor.execute("""
-            CREATE TABLE IF NOT EXISTS invoice_history (
+            CREATE TABLE invoice_history (
                 id SERIAL PRIMARY KEY,
                 jobsite_id VARCHAR(50) NOT NULL,
-                timesheet_ids TEXT[] NOT NULL,
                 work_dates TEXT[] NOT NULL,
+                foremen TEXT[] NOT NULL,
+                date_foreman_pairs TEXT[] NOT NULL,
                 qbo_invoice_id VARCHAR(50) NOT NULL,
                 qbo_invoice_number VARCHAR(50),
                 total_amount DECIMAL(10, 2),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-
-        # Index for fast timesheet lookups
         cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_invoice_history_timesheet_ids
-            ON invoice_history USING GIN (timesheet_ids)
-        """)
-
-        # Index for jobsite + date lookups
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_invoice_history_jobsite_dates
+            CREATE INDEX idx_invoice_history_jobsite
             ON invoice_history (jobsite_id)
+        """)
+        cursor.execute("""
+            CREATE INDEX idx_invoice_history_pairs
+            ON invoice_history USING GIN (date_foreman_pairs)
         """)
 
         # LMN credentials table - stores username/password and cached token
