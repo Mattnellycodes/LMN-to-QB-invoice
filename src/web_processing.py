@@ -19,7 +19,7 @@ from src.mapping.customer_mapping import (
     find_unmapped_jobsites,
     load_mapping_from_lmn_api,
 )
-from src.mapping.item_mapping import build_item_refs
+from src.mapping.item_mapping import build_item_refs, build_normalized_cache
 from src.parsing.pdf_parser import SHOP_JOBSITE_ID, PdfParseError, parse_pdf
 
 
@@ -200,8 +200,9 @@ def _resolve_line_items(
                 line["uses_fallback"] = False
         return {}, [], fallback_error
 
+    normalized_cache = build_normalized_cache(item_cache)
     item_refs, fallback_names = build_item_refs(
-        all_invoices, item_cache, db_overrides, fallback_ref
+        all_invoices, item_cache, normalized_cache, db_overrides, fallback_ref
     )
 
     for inv in all_invoices:
