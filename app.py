@@ -421,6 +421,106 @@ def mapping_skip():
 
 
 # =============================================================================
+# Item Mapping (LMN line descriptions → QBO Product/Service)
+# =============================================================================
+
+
+@app.route("/item-mapping")
+@require_qbo_auth
+def item_mapping():
+    """List LMN line descriptions currently using the Other fallback.
+
+    User-initiated (not a hard gate on /results). Every line already has a
+    valid ItemRef via the fallback; this page lets the user upgrade any to
+    a dedicated QBO Product/Service for cleaner reporting.
+    """
+    result = session.get("processing_result")
+    if not result:
+        flash("No data to map. Please upload files first.", "warning")
+        return redirect(url_for("upload"))
+
+    fallback_names = result.get("fallback_lookup_names", [])
+    fallback_error = result.get("fallback_error")
+    total_unique_items = len(result.get("item_refs", {}))
+
+    return render_template(
+        "item_mapping.html",
+        fallback_lookup_names=fallback_names,
+        fallback_error=fallback_error,
+        total_unique_items=total_unique_items,
+    )
+
+
+@app.route("/item-mapping/search", methods=["POST"])
+@require_qbo_auth
+def item_mapping_search():
+    """Search QBO Product/Service items by name (AJAX endpoint)."""
+    from src.qbo.context import get_qbo_credentials
+    from src.qbo.items import search_items_by_name
+
+    json_data = request.json
+    if not json_data:
+        return jsonify({"error": "Request must be JSON"}), 400
+    query = json_data.get("query", "")
+    if len(query) < 2:
+        return jsonify({"items": []})
+
+    try:
+        access_token, realm_id = get_qbo_credentials()
+        items = search_items_by_name(access_token, realm_id, query, limit=20)
+        return jsonify({"items": items})
+    except Exception as e:
+        logger.exception("Error searching QBO items")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/item-mapping/save", methods=["POST"])
+@require_qbo_auth
+def item_mapping_save():
+    """Persist an item mapping override and update session state."""
+    from src.db.item_overrides import save_item_override
+
+    data = request.json or {}
+    lmn_name = (data.get("lmn_item_name") or "").strip()
+    qbo_item_id = (data.get("qbo_item_id") or "").strip()
+    qbo_item_name = (data.get("qbo_item_name") or "").strip()
+
+    if not lmn_name or not qbo_item_id:
+        return jsonify({"error": "Missing lmn_item_name or qbo_item_id"}), 400
+
+    try:
+        save_item_override(lmn_name, qbo_item_id, qbo_item_name)
+
+        result = session.get("processing_result", {})
+
+        item_refs = result.get("item_refs", {})
+        item_refs[lmn_name] = {"value": qbo_item_id, "name": qbo_item_name}
+        result["item_refs"] = item_refs
+
+        fallback_names = [
+            n for n in result.get("fallback_lookup_names", []) if n != lmn_name
+        ]
+        result["fallback_lookup_names"] = fallback_names
+
+        for inv in result.get("invoices", []):
+            for line in inv.get("line_items", []):
+                if (line.get("item_lookup_name") or "") == lmn_name:
+                    line["qbo_item_name"] = qbo_item_name
+                    line["uses_fallback"] = False
+
+        summary = result.get("summary", {})
+        summary["fallback_items"] = len(fallback_names)
+        result["summary"] = summary
+
+        session["processing_result"] = result
+
+        return jsonify({"success": True, "remaining": len(fallback_names)})
+    except Exception as e:
+        logger.exception("Error saving item mapping")
+        return jsonify({"error": str(e)}), 500
+
+
+# =============================================================================
 # Results & Invoice Creation
 # =============================================================================
 
@@ -462,11 +562,14 @@ def results():
         "zero_price_items": zero_price_items,
         "total_amount": sum(inv["total"] for inv in mapped_invoices),
         "lmn_mapping_count": lmn_mapping_count,
+        "fallback_lookup_names": result.get("fallback_lookup_names", []),
+        "fallback_error": result.get("fallback_error"),
         "summary": {
             "total_jobsites": len(all_invoices),
             "mapped_jobsites": len(mapped_invoices),
             "unmapped_jobsites": len(result.get("unmapped_jobsites", [])),
             "total_line_items": sum(len(inv["line_items"]) for inv in mapped_invoices),
+            "fallback_items": len(result.get("fallback_lookup_names", [])),
         },
     }
 
@@ -514,6 +617,9 @@ def update_zero_price_items():
                 "quantity": quantity,
                 "rate": rate,
                 "amount": amount,
+                "item_lookup_name": description,
+                "qbo_item_name": None,
+                "uses_fallback": False,
             }
         )
 
@@ -541,12 +647,29 @@ def update_zero_price_items():
                 "quantity": 1,
                 "rate": inv["direct_payment_fee"],
                 "amount": inv["direct_payment_fee"],
+                "item_lookup_name": "Direct Payment Fee",
+                "qbo_item_name": None,
+                "uses_fallback": False,
             }
         )
         inv["total"] = round(inv["subtotal"] + inv["direct_payment_fee"], 2)
 
     # Clear zero-price items so modal doesn't reappear
     result["zero_price_items"] = []
+
+    # Re-resolve item refs now that new line descriptions are in play.
+    from src.web_processing import _resolve_line_items
+
+    item_refs, fallback_names, fallback_error = _resolve_line_items(
+        result["invoices"]
+    )
+    result["item_refs"] = item_refs
+    result["fallback_lookup_names"] = fallback_names
+    result["fallback_error"] = fallback_error
+    summary = result.get("summary", {})
+    summary["fallback_items"] = len(fallback_names)
+    result["summary"] = summary
+
     session["processing_result"] = result
 
     return redirect(url_for("results"))
@@ -561,6 +684,13 @@ def create_invoices():
     result = session.get("processing_result")
     if not result or not result.get("invoices"):
         flash("No invoices to create.", "warning")
+        return redirect(url_for("results"))
+
+    # Block if the Other fallback item couldn't be resolved — QBO requires
+    # an ItemRef on every line, so submitting now would cause API rejections.
+    fallback_error = result.get("fallback_error")
+    if fallback_error:
+        flash(fallback_error, "error")
         return redirect(url_for("results"))
 
     # Filter to only mapped invoices (those with qbo_customer_id)
@@ -582,8 +712,10 @@ def create_invoices():
             flash("No invoices to create after skipping duplicates.", "info")
             return redirect(url_for("results"))
 
+    item_refs = result.get("item_refs") or {}
+
     try:
-        invoice_results = create_qbo_invoices(mapped_invoices)
+        invoice_results = create_qbo_invoices(mapped_invoices, item_refs)
         session["invoice_results"] = invoice_results
         return redirect(url_for("invoice_results"))
     except Exception as e:

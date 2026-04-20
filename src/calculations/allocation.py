@@ -52,6 +52,10 @@ class JobsiteRollup:
     # Each item is augmented with source_context for zero-price notes.
     services: list[dict] = field(default_factory=list)
     hourly_rate: float = 0.0
+    # LMN rate-row description (e.g. "Maintenance Skilled Hourly Labor - TOWN").
+    # Used as the QBO item lookup key for the labor line; separate from the
+    # customer-facing invoice description.
+    hourly_rate_name: str = ""
 
     @property
     def work_hours(self) -> float:
@@ -124,6 +128,7 @@ def compute(report: ParsedReport) -> AllocationResult:
                 rate_val = parse_money(rate_row.rate)
                 if rate_val > 0:
                     rollup.hourly_rate = rate_val
+                    rollup.hourly_rate_name = rate_row.description
                     break
 
     # Pass 2: allocate shop hours.

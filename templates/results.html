@@ -75,6 +75,17 @@
 </div>
 {% endif %}
 
+{% if result.fallback_error %}
+<div class="flash error">
+    <strong>Can't create invoices:</strong> {{ result.fallback_error }}
+</div>
+{% elif result.fallback_lookup_names %}
+<div class="flash warning">
+    <strong>{{ result.fallback_lookup_names|length }} line item description(s) will use the <em>Other</em> catch-all QBO Product/Service.</strong>
+    <a href="{{ url_for('item_mapping') }}" class="btn btn-secondary" style="margin-left: 0.5rem;">Map to specific products &rarr;</a>
+</div>
+{% endif %}
+
 {% if result.duplicates %}
 <div class="flash warning">
     <strong>Warning: {{ result.duplicates|length }} jobsite(s) overlap prior invoices</strong>
@@ -179,6 +190,7 @@
             <thead>
                 <tr>
                     <th>Description</th>
+                    <th>QBO Product/Service</th>
                     <th class="text-right">Qty</th>
                     <th class="text-right">Rate</th>
                     <th class="text-right">Amount</th>
@@ -188,6 +200,17 @@
                 {% for item in invoice.line_items %}
                 <tr>
                     <td>{{ item.description }}</td>
+                    <td>
+                        {% if item.qbo_item_name %}
+                            {% if item.uses_fallback %}
+                                <em class="text-muted">{{ item.qbo_item_name }} (fallback)</em>
+                            {% else %}
+                                {{ item.qbo_item_name }}
+                            {% endif %}
+                        {% else %}
+                            <em class="text-muted">&mdash;</em>
+                        {% endif %}
+                    </td>
                     <td class="text-right">{{ "%.2f"|format(item.quantity) }}</td>
                     <td class="text-right">${{ "%.2f"|format(item.rate) }}</td>
                     <td class="text-right">${{ "%.2f"|format(item.amount) }}</td>
@@ -209,7 +232,7 @@
     </div>
     {% endif %}
     <div class="home-actions">
-        <button type="submit" class="btn btn-success">Create Draft Invoices in QuickBooks</button>
+        <button type="submit" class="btn btn-success" {% if result.fallback_error %}disabled title="Fix the 'Other' QBO item issue above before creating invoices"{% endif %}>Create Draft Invoices in QuickBooks</button>
         <a href="{{ url_for('upload') }}" class="btn btn-secondary">Start Over</a>
     </div>
 </form>
