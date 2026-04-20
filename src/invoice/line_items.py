@@ -29,6 +29,10 @@ class LineItem:
     quantity: float
     rate: float
     amount: float
+    # Match key used to resolve the QBO Product/Service ItemRef.
+    # For services/materials this equals `description`; for labor it's the
+    # LMN rate name (distinct from the synthesized customer-facing description).
+    item_lookup_name: str = ""
 
 
 @dataclass
@@ -138,6 +142,7 @@ def extract_service_line_items(
                 quantity=qty,
                 rate=rate,
                 amount=round(total, 2),
+                item_lookup_name=desc,
             )
         else:
             existing.quantity = round(existing.quantity + qty, 4)
@@ -211,6 +216,7 @@ def build_invoice(
                 quantity=round(total_hours, 2),
                 rate=rate,
                 amount=round(total_hours * rate, 2),
+                item_lookup_name=rollup.hourly_rate_name,
             )
         )
 
@@ -227,6 +233,7 @@ def build_invoice(
                 quantity=1,
                 rate=invoice.direct_payment_fee,
                 amount=invoice.direct_payment_fee,
+                item_lookup_name="Direct Payment Fee",
             )
         )
 

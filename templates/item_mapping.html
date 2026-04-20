@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+
+{% block title %}Map QBO Items{% endblock %}
+
+{% block content %}
+<h1>Map QBO Products &amp; Services</h1>
+
+<p>
+    These LMN line descriptions don't match any QuickBooks Product/Service by name,
+    so they'll post under the <strong>Other</strong> catch-all unless mapped here.
+    Mapping is optional &mdash; saved mappings persist for future uploads.
+</p>
+
+{% if fallback_error %}
+<div class="flash-message flash-error" style="margin-bottom: 1rem;">
+    {{ fallback_error }}
+</div>
+{% endif %}
+
+{% if fallback_lookup_names %}
+<div class="progress-text">
+    <span id="mapped-count">0</span> of <span id="total-count">{{ fallback_lookup_names|length }}</span> mapped
+</div>
+<div class="progress-bar">
+    <div class="progress-bar-fill" id="progress-fill" style="width: 0%"></div>
+</div>
+
+<div id="mappings-container">
+    {% for name in fallback_lookup_names %}
+    <div class="mapping-card" id="card-{{ loop.index0 }}" data-lmn-name="{{ name }}">
+        <h3>{{ name }}</h3>
+        <div class="customer-name">Currently: <em>Other</em> (fallback)</div>
+
+        <div class="search-container">
+            <input type="text"
+                   class="search-input"
+                   placeholder="Search QuickBooks products/services..."
+                   data-card-id="{{ loop.index0 }}"
+                   data-lmn-name="{{ name }}">
+            <div class="search-results"></div>
+        </div>
+
+        <div class="mapped-customer" style="display: none;">
+            <span>Mapped to: <span class="name"></span></span>
+            <button class="btn btn-secondary" onclick="unmapItem('{{ loop.index0 }}')">Change</button>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<p><em>No line items are using the fallback &mdash; everything matched a QBO Product/Service directly or has an existing override.</em></p>
+{% endif %}
+
+<div class="home-actions">
+    <a class="btn btn-success" href="/results">Continue to Results</a>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    let mappedCount = 0;
+    const totalCount = {{ fallback_lookup_names|length }};
+    let searchTimeout = null;
+
+    function updateProgress() {
+        if (totalCount === 0) return;
+        const percent = (mappedCount / totalCount) * 100;
+        const fill = document.getElementById('progress-fill');
+        if (fill) fill.style.width = percent + '%';
+        const countEl = document.getElementById('mapped-count');
+        if (countEl) countEl.textContent = mappedCount;
+    }
+
+    document.querySelectorAll('.search-input').forEach(input => {
+        const resultsDiv = input.nextElementSibling;
+
+        input.addEventListener('input', (e) => {
+            clearTimeout(searchTimeout);
+            const query = e.target.value.trim();
+
+            if (query.length < 2) {
+                resultsDiv.classList.remove('active');
+                return;
+            }
+
+            searchTimeout = setTimeout(() => {
+                searchItems(query, resultsDiv, input.dataset.cardId, input.dataset.lmnName);
+            }, 300);
+        });
+
+        input.addEventListener('focus', () => {
+            if (input.value.length >= 2) {
+                resultsDiv.classList.add('active');
+            }
+        });
+    });
+
+    document.addEventListener('click', (e) => {
+        if (!e.target.closest('.search-container')) {
+            document.querySelectorAll('.search-results').forEach(div => {
+                div.classList.remove('active');
+            });
+        }
+    });
+
+    async function searchItems(query, resultsDiv, cardId, lmnName) {
+        try {
+            const response = await fetch('/item-mapping/search', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({query: query})
+            });
+
+            if (!response.ok) {
+                throw new Error(`Search failed: ${response.status}`);
+            }
+
+            const data = await response.json();
+
+            resultsDiv.innerHTML = '';
+            if (data.items && data.items.length > 0) {
+                data.items.forEach(item => {
+                    const div = document.createElement('div');
+                    div.className = 'search-result';
+                    div.textContent = item.name;
+                    div.onclick = () => selectItem(cardId, lmnName, item.id, item.name);
+                    resultsDiv.appendChild(div);
+                });
+                resultsDiv.classList.add('active');
+            } else {
+                resultsDiv.innerHTML = '<div class="search-result">No products/services found</div>';
+                resultsDiv.classList.add('active');
+            }
+        } catch (err) {
+            console.error('Search error:', err);
+            resultsDiv.innerHTML = '<div class="search-result" style="color: #c0392b;">Search failed. Please try again.</div>';
+            resultsDiv.classList.add('active');
+        }
+    }
+
+    async function selectItem(cardId, lmnName, qboItemId, qboItemName) {
+        try {
+            const response = await fetch('/item-mapping/save', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    lmn_item_name: lmnName,
+                    qbo_item_id: qboItemId,
+                    qbo_item_name: qboItemName
+                })
+            });
+
+            if (!response.ok) {
+                throw new Error(`Save failed: ${response.status}`);
+            }
+
+            const data = await response.json();
+
+            if (data.success) {
+                const card = document.getElementById('card-' + cardId);
+                card.classList.add('mapped');
+                card.querySelector('.search-container').style.display = 'none';
+                const mappedDiv = card.querySelector('.mapped-customer');
+                mappedDiv.querySelector('.name').textContent = qboItemName;
+                mappedDiv.style.display = 'flex';
+
+                mappedCount++;
+                updateProgress();
+            } else {
+                alert('Error saving mapping: ' + (data.error || 'Unknown error'));
+            }
+        } catch (err) {
+            console.error('Save error:', err);
+            alert('Failed to save mapping. Please try again.');
+        }
+    }
+
+    function unmapItem(cardId) {
+        const card = document.getElementById('card-' + cardId);
+        card.classList.remove('mapped');
+        card.querySelector('.search-container').style.display = 'block';
+        card.querySelector('.mapped-customer').style.display = 'none';
+        card.querySelector('.search-input').value = '';
+        mappedCount--;
+        updateProgress();
+    }
+</script>
+{% endblock %}

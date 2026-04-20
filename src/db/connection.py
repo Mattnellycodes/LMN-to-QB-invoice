@@ -95,4 +95,17 @@ def init_db() -> None:
             )
         """)
 
-    print("Database initialized: customer_mapping_overrides, invoice_history, lmn_credentials tables ready")
+        # Item mapping overrides table - persists user-confirmed mappings from
+        # LMN service/material/rate names to QBO Product/Service ItemRefs.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS item_mapping_overrides (
+                lmn_item_name VARCHAR(255) PRIMARY KEY,
+                qbo_item_id VARCHAR(50) NOT NULL,
+                qbo_item_name VARCHAR(255),
+                notes TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+    print("Database initialized: customer_mapping_overrides, invoice_history, lmn_credentials, item_mapping_overrides tables ready")

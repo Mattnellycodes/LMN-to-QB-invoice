@@ -19,6 +19,7 @@ from src.mapping.customer_mapping import (
     find_unmapped_jobsites,
     load_mapping_from_lmn_api,
 )
+from src.mapping.item_mapping import build_item_refs
 from src.parsing.pdf_parser import PdfParseError, parse_pdf
 
 
@@ -123,6 +124,8 @@ def process_uploaded_pdf(filename: str, content: BytesIO) -> Dict[str, Any]:
 
     duplicates = check_for_duplicates(all_invoices)
 
+    item_refs, fallback_lookup_names, fallback_error = _resolve_line_items(all_invoices)
+
     return {
         "invoices": all_invoices,
         "unmapped_jobsites": unmapped_jobsites,
@@ -130,14 +133,81 @@ def process_uploaded_pdf(filename: str, content: BytesIO) -> Dict[str, Any]:
         "zero_price_items": zero_price_items,
         "lmn_mapping_count": lmn_mapping_count,
         "total_amount": total_amount,
+        "item_refs": item_refs,
+        "fallback_lookup_names": fallback_lookup_names,
+        "fallback_error": fallback_error,
         "summary": {
             "total_jobsites": len(invoices),
             "mapped_jobsites": mapped_count,
             "unmapped_jobsites": len(unmapped_jobsites),
             "duplicates_found": len(duplicates),
             "total_line_items": sum(len(inv["line_items"]) for inv in all_invoices),
+            "fallback_items": len(fallback_lookup_names),
         },
     }
+
+
+def _resolve_line_items(
+    all_invoices: List[Dict[str, Any]],
+) -> tuple[Dict[str, Dict[str, str]], List[str], str | None]:
+    """Resolve every line's QBO ItemRef and decorate line dicts in place.
+
+    Returns `(item_refs, fallback_lookup_names, fallback_error)`. The
+    lookup hits the QBO API once for the full item catalog; failures
+    (no QBO creds, no Other item, DB down) degrade gracefully — the
+    submit path re-checks `fallback_error` before posting.
+    """
+    item_cache: Dict[str, Dict[str, str]] = {}
+    db_overrides: Dict[str, Dict[str, str]] = {}
+    fallback_ref: Dict[str, str] | None = None
+    fallback_error: str | None = None
+
+    try:
+        from src.qbo.context import get_qbo_credentials
+        from src.qbo.items import (
+            ItemMappingError,
+            fetch_all_items,
+            get_fallback_item_ref,
+        )
+
+        access_token, realm_id = get_qbo_credentials()
+        item_cache = fetch_all_items(access_token, realm_id)
+        try:
+            fallback_ref = get_fallback_item_ref(item_cache)
+        except ItemMappingError as e:
+            fallback_error = str(e)
+    except Exception as e:
+        fallback_error = fallback_error or (
+            "QBO item catalog could not be loaded "
+            f"(per-line items will use the fallback): {e}"
+        )
+
+    try:
+        from src.db.item_overrides import get_item_overrides
+
+        db_overrides = get_item_overrides()
+    except Exception:
+        db_overrides = {}
+
+    if fallback_ref is None:
+        for inv in all_invoices:
+            for line in inv.get("line_items", []):
+                line["qbo_item_name"] = None
+                line["uses_fallback"] = False
+        return {}, [], fallback_error
+
+    item_refs, fallback_names = build_item_refs(
+        all_invoices, item_cache, db_overrides, fallback_ref
+    )
+
+    for inv in all_invoices:
+        for line in inv.get("line_items", []):
+            lookup = (line.get("item_lookup_name") or "").strip()
+            ref = item_refs.get(lookup)
+            line["qbo_item_name"] = ref["name"] if ref else None
+            line["uses_fallback"] = lookup in fallback_names
+
+    return item_refs, sorted(fallback_names), fallback_error
 
 
 def invoice_to_dict(invoice: InvoiceData) -> Dict[str, Any]:
@@ -153,6 +223,9 @@ def invoice_to_dict(invoice: InvoiceData) -> Dict[str, Any]:
                 "quantity": float(item.quantity),
                 "rate": float(item.rate),
                 "amount": float(item.amount),
+                "item_lookup_name": str(item.item_lookup_name or ""),
+                "qbo_item_name": None,
+                "uses_fallback": False,
             }
             for item in invoice.line_items
         ],
@@ -165,11 +238,31 @@ def invoice_to_dict(invoice: InvoiceData) -> Dict[str, Any]:
     }
 
 
-def create_qbo_invoices(invoices: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Create draft invoices in QBO from session invoice dicts."""
-    from src.qbo.invoices import create_draft_invoice, get_labor_item_ref
+def create_qbo_invoices(
+    invoices: List[Dict[str, Any]],
+    item_refs: Dict[str, Dict[str, str]],
+) -> List[Dict[str, Any]]:
+    """Create draft invoices in QBO from session invoice dicts.
 
-    labor_item_ref = get_labor_item_ref()
+    `item_refs` maps each line's `item_lookup_name` to a QBO ItemRef and is
+    built up-front in `process_uploaded_pdf` (with any user overrides folded
+    in via `/item-mapping/save`). Every line description must have an entry
+    or QBO will reject the invoice; the fallback `"Other"` ItemRef covers
+    unmatched names.
+    """
+    from src.qbo.classes import DEFAULT_CLASS_NAME, ClassMappingError, get_class_by_name
+    from src.qbo.context import get_qbo_credentials
+    from src.qbo.invoices import create_draft_invoice
+
+    access_token, realm_id = get_qbo_credentials()
+    class_ref = get_class_by_name(access_token, realm_id, DEFAULT_CLASS_NAME)
+    if class_ref is None:
+        raise ClassMappingError(
+            f"QBO Class named '{DEFAULT_CLASS_NAME}' is required on every "
+            "invoice line. Create it in QuickBooks (Settings → All Lists → "
+            "Classes) before creating invoices."
+        )
+
     results: list[dict] = []
 
     for inv_dict in invoices:
@@ -184,6 +277,7 @@ def create_qbo_invoices(invoices: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                     quantity=item["quantity"],
                     rate=item["rate"],
                     amount=item["amount"],
+                    item_lookup_name=item.get("item_lookup_name", ""),
                 )
                 for item in inv_dict["line_items"]
             ],
@@ -198,7 +292,8 @@ def create_qbo_invoices(invoices: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         result = create_draft_invoice(
             invoice,
             qbo_customer_id=inv_dict["qbo_customer_id"],
-            item_ref=labor_item_ref,
+            item_refs=item_refs,
+            class_ref=class_ref,
         )
 
         results.append(

@@ -29,7 +29,8 @@ class InvoiceResult:
 def create_draft_invoice(
     invoice_data: InvoiceData,
     qbo_customer_id: str,
-    item_ref: Optional[Dict] = None,
+    item_refs: Dict[str, Dict[str, str]],
+    class_ref: Optional[Dict[str, str]] = None,
     terms: str = "Net 15",
 ) -> InvoiceResult:
     """
@@ -38,7 +39,11 @@ def create_draft_invoice(
     Args:
         invoice_data: Invoice data with line items
         qbo_customer_id: QBO customer ID
-        item_ref: Optional QBO item reference for line items
+        item_refs: Map of `item_lookup_name` -> QBO ItemRef. Every line's
+            lookup name must resolve (unmatched names use the pre-fetched
+            fallback ItemRef) — QBO rejects invoice lines missing ItemRef.
+        class_ref: Optional QBO ClassRef applied to every line. Requires
+            ClassTrackingPerTxnLine preference enabled on the company.
         terms: Payment terms (default Net 15)
 
     Returns:
@@ -53,7 +58,8 @@ def create_draft_invoice(
     # Build line items for QBO API
     qbo_lines = []
     for i, item in enumerate(invoice_data.line_items, start=1):
-        qbo_line = build_qbo_line_item(item, i, item_ref)
+        ref = item_refs.get(item.item_lookup_name)
+        qbo_line = build_qbo_line_item(item, i, ref, class_ref=class_ref)
         qbo_lines.append(qbo_line)
 
     # Build invoice payload
@@ -139,7 +145,12 @@ def create_draft_invoice(
         )
 
 
-def build_qbo_line_item(item: LineItem, line_num: int, item_ref: Optional[Dict]) -> Dict:
+def build_qbo_line_item(
+    item: LineItem,
+    line_num: int,
+    item_ref: Optional[Dict],
+    class_ref: Optional[Dict[str, str]] = None,
+) -> Dict:
     """
     Build a QBO API line item from our LineItem.
 
@@ -159,6 +170,9 @@ def build_qbo_line_item(item: LineItem, line_num: int, item_ref: Optional[Dict])
     if item_ref:
         line["SalesItemLineDetail"]["ItemRef"] = item_ref
 
+    if class_ref:
+        line["SalesItemLineDetail"]["ClassRef"] = class_ref
+
     return line
 
 
@@ -176,41 +190,3 @@ def calculate_due_date(invoice_date: datetime, terms: str) -> datetime:
     return invoice_date + timedelta(days=days)
 
 
-def get_item_by_name(item_name: str) -> Optional[Dict]:
-    """
-    Look up a QBO item (product/service) by name.
-
-    Returns the item with Id for use as ItemRef.
-    """
-    access_token, realm_id = get_qbo_credentials()
-
-    safe_name = item_name.replace("'", "\\'")
-    query = f"SELECT * FROM Item WHERE Name = '{safe_name}'"
-
-    url = f"{get_api_base_url()}/{realm_id}/query"
-
-    response = requests.get(
-        url,
-        headers={
-            "Authorization": f"Bearer {access_token}",
-            "Accept": "application/json",
-        },
-        params={"query": query},
-    )
-    response.raise_for_status()
-
-    data = response.json()
-    items = data.get("QueryResponse", {}).get("Item", [])
-    return items[0] if items else None
-
-
-def get_labor_item_ref() -> Optional[Dict]:
-    """
-    Get the ItemRef for 'Skilled Garden Hourly Labor' product/service.
-
-    Returns {"value": "id", "name": "name"} or None if not found.
-    """
-    item = get_item_by_name("Skilled Garden Hourly Labor")
-    if item:
-        return {"value": item["Id"], "name": item["Name"]}
-    return None

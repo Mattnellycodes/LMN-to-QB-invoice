@@ -148,3 +148,43 @@ def test_load_included_items_reads_config_file():
     assert "MOW" in items
     assert "Small Project" in items
     assert len(items) == 10
+
+
+def test_service_lines_carry_item_lookup_name():
+    services = [_svc("Mulch, Soil Pep, bulk [Yd]", qty=6, total=378.48, rate=63.08)]
+    items = extract_service_line_items(services, INCLUDED)
+    assert items[0].description == "Mulch, Soil Pep, bulk [Yd]"
+    assert items[0].item_lookup_name == "Mulch, Soil Pep, bulk [Yd]"
+
+
+def test_labor_line_uses_rate_name_as_lookup_description_preserved():
+    rollup = JobsiteRollup(
+        jobsite_id="ABC",
+        customer_name="Customer A",
+        hourly_rate=75.0,
+        hourly_rate_name="Maintenance Skilled Hourly Labor - TOWN",
+    )
+    rollup.work_by_date_foreman[("Mon-Apr-13-2026", "Jenna")] = 10.0
+
+    inv = build_invoice(rollup, INCLUDED, invoice_date="2026-04-19")
+    labor = inv.line_items[0]
+
+    # Customer-facing description stays synthesized.
+    assert labor.description == "Skilled Garden Hourly Labor 4/13"
+    # QBO lookup key is the raw LMN rate name.
+    assert labor.item_lookup_name == "Maintenance Skilled Hourly Labor - TOWN"
+
+
+def test_fee_line_has_stable_item_lookup_name():
+    rollup = JobsiteRollup(
+        jobsite_id="ABC",
+        customer_name="Customer A",
+        hourly_rate=75.0,
+        hourly_rate_name="Labor",
+    )
+    rollup.work_by_date_foreman[("Mon-Apr-13-2026", "Jenna")] = 1.0
+
+    inv = build_invoice(rollup, INCLUDED, invoice_date="2026-04-19")
+    fee = next(li for li in inv.line_items
+               if li.description == "Please subtract if paying by USPS check")
+    assert fee.item_lookup_name == "Direct Payment Fee"
