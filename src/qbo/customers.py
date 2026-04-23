@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Dict, List, Optional
 
 import requests
 
 from src.qbo.context import get_qbo_credentials
+
+logger = logging.getLogger(__name__)
 
 
 def get_api_base_url() -> str:
@@ -29,6 +32,7 @@ def get_all_customers() -> List[Dict]:
     customers = []
     start_position = 1
     max_results = 1000
+    logger.debug("Fetching all QBO customers (paginated)")
 
     while True:
         query = f"SELECT * FROM Customer STARTPOSITION {start_position} MAXRESULTS {max_results}"
@@ -57,6 +61,7 @@ def get_all_customers() -> List[Dict]:
         if len(batch) < max_results:
             break
 
+    logger.info("Fetched %d QBO customers", len(customers))
     return customers
 
 
@@ -101,7 +106,9 @@ def search_customers_by_name(name: str) -> List[Dict]:
     response.raise_for_status()
 
     data = response.json()
-    return data.get("QueryResponse", {}).get("Customer", [])
+    results = data.get("QueryResponse", {}).get("Customer", [])
+    logger.info("QBO customer search: query=%r matched=%d", name, len(results))
+    return results
 
 
 def export_customers_for_mapping(output_path: str) -> None:
@@ -127,4 +134,4 @@ def export_customers_for_mapping(output_path: str) -> None:
                 }
             )
 
-    print(f"Exported {len(customers)} customers to {output_path}")
+    logger.info("Exported %d customers to %s", len(customers), output_path)

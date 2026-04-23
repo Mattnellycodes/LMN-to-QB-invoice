@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import csv
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Union
+
+logger = logging.getLogger(__name__)
 
 # Default mapping file location
 DEFAULT_MAPPING_FILE = Path(__file__).parent.parent.parent / "config" / "customer_mapping.csv"
@@ -75,9 +78,9 @@ def load_mapping_from_lmn_api(
     try:
         from src.lmn.api import load_mapping_from_lmn_api as fetch_lmn_mappings
         mappings = fetch_lmn_mappings()
-    except (ValueError, Exception):
-        # LMN API not configured or failed - continue with empty base mappings
-        pass
+        logger.info("Loaded %d customer mappings from LMN API", len(mappings))
+    except (ValueError, Exception) as e:
+        logger.warning("Could not load customer mappings from LMN API: %s", e)
 
     # Apply overrides (database for production, CSV for local dev)
     if use_db_overrides:
@@ -86,15 +89,18 @@ def load_mapping_from_lmn_api(
             db_overrides = get_customer_overrides()
             if db_overrides:
                 mappings.update(db_overrides)
+                logger.info("Applied %d DB customer overrides", len(db_overrides))
         except Exception:
-            # Database not available - fall back to CSV
+            logger.exception("DB customer overrides unavailable; trying CSV fallback")
             csv_overrides = load_customer_mapping(csv_override_path)
             if csv_overrides:
                 mappings.update(csv_overrides)
+                logger.info("Applied %d CSV customer overrides", len(csv_overrides))
     else:
         csv_overrides = load_customer_mapping(csv_override_path)
         if csv_overrides:
             mappings.update(csv_overrides)
+            logger.info("Applied %d CSV customer overrides", len(csv_overrides))
 
     return mappings
 
@@ -160,4 +166,6 @@ def create_mapping_template(jobsite_ids: List[str], output_path: Union[str, Path
                 }
             )
 
-    print(f"Created mapping template with {len(jobsite_ids)} jobsites: {path}")
+    logger.info(
+        "Created mapping template with %d jobsites: %s", len(jobsite_ids), path
+    )

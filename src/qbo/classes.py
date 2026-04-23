@@ -7,11 +7,14 @@ already be enabled on the connected company.
 
 from __future__ import annotations
 
+import logging
 from typing import Dict, Optional
 
 import requests
 
 from src.qbo.customers import get_api_base_url
+
+logger = logging.getLogger(__name__)
 
 
 DEFAULT_CLASS_NAME = "Maintenance"
@@ -52,5 +55,7 @@ def get_class_by_name(
         class_name = (qbo_class.get("Name") or "").strip()
         class_id = qbo_class.get("Id")
         if class_name and class_id:
+            logger.debug("Resolved QBO Class %r -> id=%s", name, class_id)
             return {"value": class_id, "name": class_name}
+    logger.warning("QBO Class %r not found on company %s", name, realm_id)
     return None

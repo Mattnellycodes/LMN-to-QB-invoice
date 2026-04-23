@@ -6,6 +6,7 @@ import io
 import logging
 import os
 import secrets
+import time
 from datetime import datetime
 from functools import wraps
 
@@ -13,6 +14,7 @@ from dotenv import load_dotenv
 from flask import (
     Flask,
     flash,
+    g,
     jsonify,
     redirect,
     render_template,
@@ -21,7 +23,10 @@ from flask import (
     url_for,
 )
 
+from src.logging_config import configure_logging
+
 load_dotenv()
+configure_logging()
 
 logger = logging.getLogger(__name__)
 
@@ -46,8 +51,30 @@ except Exception as e:
 
 
 # =============================================================================
-# Request Hooks - Load QBO credentials into request context
+# Request Hooks - Request ID, access log, QBO credentials
 # =============================================================================
+
+
+@app.before_request
+def assign_request_id():
+    """Assign a short request ID and start timer for access log."""
+    g.request_id = secrets.token_hex(4)
+    g.request_start = time.monotonic()
+
+
+@app.after_request
+def log_request(response):
+    """One-line access log per request: method, path, status, duration."""
+    start = getattr(g, "request_start", None)
+    duration_ms = int((time.monotonic() - start) * 1000) if start else -1
+    logger.info(
+        "%s %s -> %d (%dms)",
+        request.method,
+        request.path,
+        response.status_code,
+        duration_ms,
+    )
+    return response
 
 
 @app.before_request

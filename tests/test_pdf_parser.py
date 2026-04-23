@@ -78,3 +78,49 @@ def test_unreadable_pdf_raises():
     """Non-PDF bytes still raise — we only relaxed the *SHOP-presence check."""
     with pytest.raises(PdfParseError):
         parse_pdf(b"%PDF-1.4\n%% not a real pdf\n")
+
+
+BILLION_PDF = (
+    Path(__file__).resolve().parents[1]
+    / "Sample Time Sheets"
+    / "7473-639125667698527109.pdf"
+)
+
+
+@pytest.fixture(scope="module")
+def billion_report():
+    if not BILLION_PDF.exists():
+        pytest.skip(f"Sample PDF missing: {BILLION_PDF}")
+    return parse_pdf(BILLION_PDF)
+
+
+def test_single_digit_day_headers_are_parsed(billion_report):
+    """LMN renders single-digit days without a leading zero
+    (e.g. 'Tue-Apr-7-2026'). All three tasks must be captured across
+    two days, not collapsed to just the Apr-22 task."""
+    assert len(billion_report.customers) == 1
+    assert "5796015W" in billion_report.customers
+    assert len(billion_report.tasks) == 3
+
+    dates = sorted({t.date for t in billion_report.tasks})
+    assert dates == ["Tue-Apr-7-2026", "Wed-Apr-22-2026"]
+
+    foremen = sorted(t.foreman for t in billion_report.tasks)
+    assert foremen == ["Katy Brennan", "Kree S", "Ruby Loeffelholz"]
+
+
+def test_single_digit_day_task_totals(billion_report):
+    by_foreman = {t.foreman: t for t in billion_report.tasks}
+
+    ruby = by_foreman["Ruby Loeffelholz"]
+    assert ruby.date == "Tue-Apr-7-2026"
+    assert ruby.task_man_hrs == pytest.approx(3.13)
+    assert sum(
+        float(r.total_price.replace("$", "").replace(",", ""))
+        for r in ruby.rates
+    ) == pytest.approx(235.00)
+
+    kree = by_foreman["Kree S"]
+    assert kree.date == "Tue-Apr-7-2026"
+    assert kree.task_man_hrs == pytest.approx(2.93)
+    assert any(s.total_price == "$13.75" for s in kree.services)

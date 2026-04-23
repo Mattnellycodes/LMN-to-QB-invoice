@@ -47,11 +47,14 @@ def get_job_matching() -> List[Dict]:
         "Content-Type": "application/json",
     }
 
+    logger.debug("GET %s", LMN_API_URL)
     response = requests.get(LMN_API_URL, headers=headers, timeout=30)
     response.raise_for_status()
 
     data = response.json()
-    return data.get("lmnitems", [])
+    items = data.get("lmnitems", [])
+    logger.info("LMN job matching returned %d items", len(items))
+    return items
 
 
 def build_mapping_from_lmn(lmn_data: List[Dict]) -> Dict[str, CustomerMapping]:

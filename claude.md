@@ -33,10 +33,14 @@ CostCode 900: "Unbillable/Overhead" — drive time AND load/unload time (both po
 Foreman: The crew lead; the key that links shop overhead hours to the jobsites a crew visited that day
 
 Drive Time Allocation Formula
-Pool = all CostCode 900 tasks under *SHOP, summed per (work_date, foreman).
-For each (work_date, foreman), share equally across the unique billable
-jobsites that same foreman worked that day:
-    Allocated per Jobsite = Shop Hours(date, foreman) / |Jobsites(date, foreman)|
+Pool = all CostCode 900 tasks under *SHOP (drive time + land/load time),
+summed per (work_date, foreman).
+For each (work_date, foreman), allocate to each billable jobsite weighted by
+that jobsite's billable work hours for that same (date, foreman):
+    Allocated per Jobsite = Shop Hours(date, foreman)
+                            * Work Hours(date, foreman, jobsite)
+                            / Σ Work Hours(date, foreman, *)
+Fallback: if Σ Work Hours is 0 for that (date, foreman), split equally.
 A jobsite's total allocated drive across the reporting period is the sum of
 its per-day shares.
 Billable Hours Calculation

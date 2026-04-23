@@ -8,6 +8,7 @@ zero-price modal.
 
 from __future__ import annotations
 
+import logging
 import re
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -17,6 +18,8 @@ from typing import Iterable, Optional
 
 from src.calculations.allocation import JobsiteRollup
 from src.parsing.pdf_parser import parse_money, parse_qty
+
+logger = logging.getLogger(__name__)
 
 
 INCLUDED_ITEMS_PATH = Path(__file__).resolve().parents[2] / "config" / "included_items.txt"
@@ -266,9 +269,22 @@ def build_all_invoices(
     """Build invoices for every jobsite rollup with a non-empty subtotal."""
     if included is None:
         included = load_included_items()
+    logger.debug("Included-items allow-list size: %d", len(included))
     invoices: list[InvoiceData] = []
+    skipped = 0
+    fees_applied = 0
     for rollup in rollups:
         invoice = build_invoice(rollup, included, invoice_date)
         if invoice.subtotal > 0:
             invoices.append(invoice)
+            if invoice.direct_payment_fee > 0:
+                fees_applied += 1
+        else:
+            skipped += 1
+    logger.info(
+        "Built %d invoices (skipped=%d zero-subtotal, direct-pay fee applied=%d)",
+        len(invoices),
+        skipped,
+        fees_applied,
+    )
     return invoices

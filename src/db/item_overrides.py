@@ -6,9 +6,12 @@ Persists user-confirmed mappings from an LMN service/material/rate name
 
 from __future__ import annotations
 
+import logging
 from typing import Dict, Optional
 
 from src.db.connection import db_cursor
+
+logger = logging.getLogger(__name__)
 
 
 def get_item_overrides() -> Dict[str, Dict[str, str]]:
@@ -30,6 +33,7 @@ def get_item_overrides() -> Dict[str, Dict[str, str]]:
                 "name": qbo_name or "",
             }
 
+    logger.debug("Loaded %d item override rows", len(overrides))
     return overrides
 
 
@@ -54,6 +58,11 @@ def save_item_override(
             """,
             (lmn_item_name, qbo_item_id, qbo_item_name, notes),
         )
+    logger.info(
+        "Saved item override: lmn_item_name=%r qbo_item_id=%s",
+        lmn_item_name,
+        qbo_item_id,
+    )
 
 
 def delete_item_override(lmn_item_name: str) -> bool:
@@ -63,4 +72,8 @@ def delete_item_override(lmn_item_name: str) -> bool:
             "DELETE FROM item_mapping_overrides WHERE lmn_item_name = %s",
             (lmn_item_name,),
         )
-        return cursor.rowcount > 0
+        deleted = cursor.rowcount > 0
+    logger.info(
+        "Delete item override: lmn_item_name=%r deleted=%s", lmn_item_name, deleted
+    )
+    return deleted

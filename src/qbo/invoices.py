@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Dict, Optional
@@ -11,6 +12,8 @@ import requests
 from src.invoice.line_items import InvoiceData, LineItem
 from src.qbo.context import get_qbo_credentials
 from src.qbo.customers import get_api_base_url
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -73,6 +76,13 @@ def create_draft_invoice(
 
     url = f"{get_api_base_url()}/{realm_id}/invoice"
 
+    logger.debug(
+        "POST QBO invoice: jobsite=%s customer_ref=%s lines=%d",
+        invoice_data.jobsite_id,
+        qbo_customer_id,
+        len(qbo_lines),
+    )
+
     try:
         response = requests.post(
             url,
@@ -106,8 +116,11 @@ def create_draft_invoice(
                     total_amount=total_amt,
                 )
         except Exception:
-            # Database not available - skip history recording
-            pass
+            logger.exception(
+                "Failed to record invoice history for jobsite=%s invoice_id=%s",
+                invoice_data.jobsite_id,
+                invoice_id,
+            )
 
         return InvoiceResult(
             success=True,
@@ -120,7 +133,9 @@ def create_draft_invoice(
 
     except requests.exceptions.HTTPError as e:
         error_msg = str(e)
+        intuit_tid = None
         try:
+            intuit_tid = e.response.headers.get("intuit_tid") if e.response is not None else None
             error_detail = e.response.json()
             if "Fault" in error_detail:
                 errors = error_detail["Fault"].get("Error", [])
@@ -128,6 +143,13 @@ def create_draft_invoice(
                     error_msg = errors[0].get("Detail", error_msg)
         except Exception:
             pass
+        logger.error(
+            "QBO invoice POST failed: jobsite=%s status=%s intuit_tid=%s error=%s",
+            invoice_data.jobsite_id,
+            getattr(e.response, "status_code", "?"),
+            intuit_tid,
+            error_msg,
+        )
 
         return InvoiceResult(
             success=False,
@@ -137,6 +159,10 @@ def create_draft_invoice(
         )
 
     except Exception as e:
+        logger.exception(
+            "Unexpected error creating QBO invoice for jobsite=%s",
+            invoice_data.jobsite_id,
+        )
         return InvoiceResult(
             success=False,
             jobsite_id=invoice_data.jobsite_id,

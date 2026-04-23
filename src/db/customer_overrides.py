@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Dict
 
 from src.db.connection import db_cursor
 from src.mapping.customer_mapping import CustomerMapping
+
+logger = logging.getLogger(__name__)
 
 
 def get_customer_overrides() -> Dict[str, CustomerMapping]:
@@ -32,6 +35,7 @@ def get_customer_overrides() -> Dict[str, CustomerMapping]:
                 notes=notes or "",
             )
 
+    logger.debug("Loaded %d customer override rows", len(mappings))
     return mappings
 
 
@@ -57,6 +61,11 @@ def save_customer_override(mapping: CustomerMapping) -> None:
             mapping.qbo_display_name,
             mapping.notes,
         ))
+    logger.info(
+        "Saved customer override: jobsite=%s qbo_customer_id=%s",
+        mapping.jobsite_id,
+        mapping.qbo_customer_id,
+    )
 
 
 def delete_customer_override(jobsite_id: str) -> bool:
@@ -71,4 +80,8 @@ def delete_customer_override(jobsite_id: str) -> bool:
             DELETE FROM customer_mapping_overrides
             WHERE jobsite_id = %s
         """, (jobsite_id,))
-        return cursor.rowcount > 0
+        deleted = cursor.rowcount > 0
+    logger.info(
+        "Delete customer override: jobsite=%s deleted=%s", jobsite_id, deleted
+    )
+    return deleted

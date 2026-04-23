@@ -10,11 +10,10 @@ import sys
 
 
 def main() -> int:
-    print(
+    sys.stderr.write(
         "The CLI has been removed. Run the web app instead:\n\n"
         "    python app.py\n\n"
-        "Then open http://localhost:5000 and upload the LMN Job History PDF.",
-        file=sys.stderr,
+        "Then open http://localhost:5000 and upload the LMN Job History PDF.\n"
     )
     return 1
 

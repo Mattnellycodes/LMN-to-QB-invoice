@@ -228,7 +228,7 @@ Time DataFrame ──► calculate_billable_hours() ──► List[JobsiteHours]
                    │
                    ├── calculate_drive_time_allocation()
                    │   └── Groups by TimesheetID
-                   │   └── Splits drive time equally
+                   │   └── Splits drive time weighted by billable hours
                    │
                    ├── calculate_work_hours_by_jobsite()
                    │   └── Sums CostCode 200 hours

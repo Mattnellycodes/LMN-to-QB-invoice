@@ -7,10 +7,13 @@ to detect when a new upload covers work already billed.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Dict, List, Optional
 
 from src.db.connection import db_cursor
+
+logger = logging.getLogger(__name__)
 
 
 _PAIR_SEP = "|"
@@ -59,6 +62,12 @@ def record_invoice_creation(
                 datetime.now(),
             ),
         )
+    logger.info(
+        "Recorded invoice history: jobsite=%s invoice#=%s pairs=%d",
+        jobsite_id,
+        qbo_invoice_number,
+        len(set(date_foreman_pairs)),
+    )
 
 
 def find_already_invoiced(
@@ -94,6 +103,12 @@ def find_already_invoiced(
                     "created_at": created.isoformat() if created else None,
                 }
             )
+        logger.debug(
+            "find_already_invoiced: jobsite=%s candidate_pairs=%d matches=%d",
+            jobsite_id,
+            len(date_foreman_pairs),
+            len(results),
+        )
         return results
 
 
