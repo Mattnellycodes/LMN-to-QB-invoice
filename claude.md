@@ -187,9 +187,8 @@ LMN Authentication
 The app authenticates against LMN's accounting API at https://accounting-api.golmn.com/token:
 - Token sources (priority order):
   1. Cached token from database (if not expired)
-  2. Re-authenticate with DB-stored credentials (entered via home page)
-  3. LMN_EMAIL + LMN_PASSWORD from .env
-  4. LMN_API_TOKEN env var (bare token, legacy)
+  2. LMN_EMAIL + LMN_PASSWORD from .env
+  3. LMN_API_TOKEN env var (bare token, legacy)
 - Access tokens are cached (~10 hour lifetime) and auto-refreshed
 - See docs/LMN_API.md for full endpoint details
 

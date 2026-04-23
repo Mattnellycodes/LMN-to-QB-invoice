@@ -58,6 +58,24 @@ def _clear_processing_result():
     results_store.delete(session.pop("results_key", None))
 
 
+def _active_zero_price_items(result):
+    """Zero-price items that belong to mapped jobsites — the list actually rendered in the modal.
+
+    Shared by GET /results (renders the modal) and POST /update-zero-price-items
+    (validates submitted prices) so both agree on which item indexes to expect.
+    """
+    mapped_ids = {
+        inv["jobsite_id"]
+        for inv in result.get("invoices", [])
+        if inv.get("qbo_customer_id")
+    }
+    return [
+        item
+        for item in result.get("zero_price_items", [])
+        if item["jobsite_id"] in mapped_ids
+    ]
+
+
 def _get_invoice_result():
     return results_store.load(session.get("invoice_results_key"))
 
@@ -85,8 +103,8 @@ app.secret_key = _secret_key
 try:
     from src.db.connection import init_db
     init_db()
-except Exception as e:
-    logger.warning(f"Database initialization skipped: {e}")
+except Exception:
+    logger.exception("Database initialization failed — app will run without DB features")
 
 
 # =============================================================================
@@ -201,9 +219,6 @@ def health():
 def index():
     """Landing page with QuickBooks connection status."""
     from src.qbo.context import has_qbo_credentials
-
-    # Clear any lingering invoice_type from older sessions
-    session.pop("invoice_type", None)
 
     is_connected = has_qbo_credentials()
     realm_id = session.get("qbo_tokens", {}).get("realm_id") if is_connected else None
@@ -366,6 +381,13 @@ def upload_post():
 
         _clear_processing_result()
         _set_processing_result(result)
+
+        logger.info(
+            "POST /upload committed: invoices=%d unmapped=%d zero_price=%d",
+            len(result.get("invoices", [])),
+            len(result.get("unmapped_jobsites", [])),
+            len(result.get("zero_price_items", [])),
+        )
 
         if result.get("unmapped_jobsites"):
             return redirect(url_for("mapping"))
@@ -629,13 +651,7 @@ def results():
     # Check LMN status for display
     lmn_mapping_count = result.get("lmn_mapping_count", 0)
 
-    # Filter zero-price items to only mapped invoices
-    mapped_jobsite_ids = {inv["jobsite_id"] for inv in mapped_invoices}
-    zero_price_items = [
-        item
-        for item in result.get("zero_price_items", [])
-        if item["jobsite_id"] in mapped_jobsite_ids
-    ]
+    zero_price_items = _active_zero_price_items(result)
 
     # Build display result with only mapped invoices
     display_result = {
@@ -676,9 +692,16 @@ def update_zero_price_items():
         flash("No data to display. Please upload files first.", "warning")
         return redirect(url_for("upload"))
 
-    zero_price_items = result.get("zero_price_items", [])
+    zero_price_items = _active_zero_price_items(result)
     if not zero_price_items:
         return redirect(url_for("results"))
+
+    submitted_keys = sorted(k for k in request.form.keys() if k.startswith(("rate_", "quantity_", "description_")))
+    logger.info(
+        "POST /update-zero-price-items: %d active items, form keys=%s",
+        len(zero_price_items),
+        submitted_keys,
+    )
 
     # Parse and validate submitted prices
     from src.invoice.line_items import strip_unit_marker
@@ -691,6 +714,12 @@ def update_zero_price_items():
         desc = request.form.get(f"description_{idx}", "").strip()
 
         if not rate_str or float(rate_str) <= 0:
+            logger.warning(
+                "Zero-price validation failed: item index=%s jobsite=%s rate_str=%r",
+                idx,
+                item.get("jobsite_id"),
+                rate_str,
+            )
             flash("All items must have a price greater than $0.", "error")
             return redirect(url_for("results"))
 
@@ -762,6 +791,11 @@ def update_zero_price_items():
     result["summary"] = summary
 
     _set_processing_result(result)
+    logger.info(
+        "POST /update-zero-price-items committed: %d item(s) priced across %d jobsite(s)",
+        sum(len(v) for v in new_line_items_by_jobsite.values()),
+        len(new_line_items_by_jobsite),
+    )
 
     return redirect(url_for("results"))
 
@@ -809,11 +843,24 @@ def create_invoices():
 
     item_refs = result.get("item_refs") or {}
 
+    logger.info(
+        "POST /create-invoices: attempting %d invoice(s) (skip_duplicates=%s)",
+        len(mapped_invoices),
+        bool(request.form.get("skip_duplicates")),
+    )
+
     try:
         invoice_results = create_qbo_invoices(mapped_invoices, item_refs)
         _set_invoice_result(invoice_results)
+        success_count = sum(1 for r in invoice_results if r.get("success"))
+        logger.info(
+            "POST /create-invoices committed: created=%d failed=%d",
+            success_count,
+            len(invoice_results) - success_count,
+        )
         return redirect(url_for("invoice_results"))
     except Exception as e:
+        logger.exception("POST /create-invoices failed")
         flash(f"Error creating invoices: {e}", "error")
         return redirect(url_for("results"))
 
