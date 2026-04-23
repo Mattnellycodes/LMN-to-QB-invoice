@@ -12,6 +12,7 @@ Policy (confirmed by user):
 
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
 
@@ -22,6 +23,8 @@ from src.parsing.pdf_parser import (
     Task,
     parse_money,
 )
+
+logger = logging.getLogger(__name__)
 
 
 BILLABLE_COST_CODE = "200"
@@ -145,6 +148,14 @@ def compute(report: ParsedReport) -> AllocationResult:
             continue
         share = shop_hours / len(jobsites)
         shared = sorted(jobsites)
+        logger.debug(
+            "Allocating: date=%s foreman=%s shop_hrs=%.2f jobsites=%d share=%.2f",
+            date,
+            foreman,
+            shop_hours,
+            len(jobsites),
+            share,
+        )
         for jobsite_id in jobsites:
             rollup = rollups[jobsite_id]
             rollup.allocated_drive_hours += share
@@ -157,6 +168,17 @@ def compute(report: ParsedReport) -> AllocationResult:
                     share=share,
                 )
             )
+
+    unallocated = [
+        (date, foreman)
+        for (date, foreman), hrs in shop_pool.items()
+        if hrs > 0 and (date, foreman) not in jobsites_by_day_foreman
+    ]
+    if unallocated:
+        logger.warning(
+            "Shop pool entries with no matching billable jobsite foreman: %d",
+            len(unallocated),
+        )
 
     return AllocationResult(rollups=rollups, shop_pool=shop_pool)
 

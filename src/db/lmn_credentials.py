@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
 from typing import Optional, Tuple
 
 from src.db.connection import db_cursor
+
+logger = logging.getLogger(__name__)
 
 
 def init_lmn_credentials_table() -> None:
@@ -40,6 +43,7 @@ def save_lmn_credentials(username: str, password: str) -> None:
                 token_expires_at = NULL,
                 updated_at = CURRENT_TIMESTAMP
         """, (username, password))
+    logger.info("Saved LMN credentials for user=%s", username)
 
 
 def get_lmn_credentials() -> Optional[Tuple[str, str]]:
@@ -73,6 +77,7 @@ def save_lmn_token(token: str, expires_at: datetime) -> None:
             SET cached_token = %s, token_expires_at = %s, updated_at = CURRENT_TIMESTAMP
             WHERE id = 1
         """, (token, expires_at))
+    logger.debug("Cached LMN token (expires %s)", expires_at)
 
 
 def get_cached_token() -> Optional[str]:
@@ -101,6 +106,7 @@ def delete_lmn_credentials() -> None:
     """Delete stored LMN credentials and cached token."""
     with db_cursor() as cursor:
         cursor.execute("DELETE FROM lmn_credentials WHERE id = 1")
+    logger.info("Deleted stored LMN credentials")
 
 
 def has_lmn_credentials() -> bool:

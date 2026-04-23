@@ -8,6 +8,7 @@ jobsites downstream; billable work lives under other jobsite blocks.
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field
 from io import BytesIO
@@ -16,16 +17,18 @@ from typing import BinaryIO, Union
 
 import pypdfium2 as pdfium
 
+logger = logging.getLogger(__name__)
+
 
 SHOP_JOBSITE_ID = "5613100W"
 
 DAY_HEADER_RE = re.compile(
     r"^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)-"
-    r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2}-\d{4}$"
+    r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{1,2}-\d{4}$"
 )
 JOBSITE_ID_RE = re.compile(r"^\d{7}[A-Z]$")
 DATE_RANGE_LINE_RE = re.compile(
-    r"^[A-Z][a-z]{2}-\d{2}-\d{4} to [A-Z][a-z]{2}-\d{2}-\d{4}"
+    r"^[A-Z][a-z]{2}-\d{1,2}-\d{4} to [A-Z][a-z]{2}-\d{1,2}-\d{4}"
 )
 
 _FIELD_LABELS = (
@@ -103,8 +106,14 @@ def parse_pdf(source: Union[str, Path, bytes, BinaryIO]) -> ParsedReport:
         pages_lines = _extract_lines(pdf_bytes)
     except pdfium.PdfiumError as e:
         raise PdfParseError(f"Could not read PDF: {e}") from e
+    logger.debug("Extracted %d pages from PDF", len(pages_lines))
     report = _walk(pages_lines)
     _validate(report)
+    logger.debug(
+        "Walk complete: customers=%d tasks=%d",
+        len(report.customers),
+        len(report.tasks),
+    )
     return report
 
 

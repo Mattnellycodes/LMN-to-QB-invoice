@@ -8,11 +8,14 @@ any known QBO product.
 
 from __future__ import annotations
 
+import logging
 from typing import Dict, List
 
 import requests
 
 from src.qbo.customers import get_api_base_url
+
+logger = logging.getLogger(__name__)
 
 
 FALLBACK_ITEM_NAME = "Other"
@@ -65,6 +68,7 @@ def fetch_all_items(access_token: str, realm_id: str) -> Dict[str, Dict[str, str
             break
         start_position += PAGE_SIZE
 
+    logger.debug("Loaded %d QBO items into cache", len(cache))
     return cache
 
 
@@ -76,6 +80,7 @@ def get_fallback_item_ref(item_cache: Dict[str, Dict[str, str]]) -> Dict[str, st
     """
     ref = item_cache.get(FALLBACK_ITEM_NAME.strip().lower())
     if ref is None:
+        logger.error("QBO fallback item '%s' not found in cache", FALLBACK_ITEM_NAME)
         raise ItemMappingError(
             f"QBO Product/Service named '{FALLBACK_ITEM_NAME}' is required "
             "as a catch-all for unmapped invoice lines. Create it in QBO "
@@ -124,4 +129,5 @@ def search_items_by_name(
         item_id = item.get("Id")
         if name and item_id:
             results.append({"id": item_id, "name": name})
+    logger.info("QBO item search: query=%r matched=%d", fragment, len(results))
     return results

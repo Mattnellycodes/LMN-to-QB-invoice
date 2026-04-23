@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from contextlib import contextmanager
 from typing import Generator
 
 import psycopg2
 from psycopg2.extensions import connection as PgConnection
+
+logger = logging.getLogger(__name__)
 
 
 def get_database_url() -> str:
@@ -36,6 +39,7 @@ def db_cursor() -> Generator:
         conn.commit()
     except Exception:
         conn.rollback()
+        logger.exception("Database operation failed; rolled back")
         raise
     finally:
         cursor.close()
@@ -60,9 +64,8 @@ def init_db() -> None:
         # Invoice history table — tracks (jobsite, date, foreman) triples
         # already invoiced to QBO. date_foreman_pairs stores "date|foreman"
         # strings enabling GIN-indexed overlap queries for duplicate detection.
-        cursor.execute("DROP TABLE IF EXISTS invoice_history")
         cursor.execute("""
-            CREATE TABLE invoice_history (
+            CREATE TABLE IF NOT EXISTS invoice_history (
                 id SERIAL PRIMARY KEY,
                 jobsite_id VARCHAR(50) NOT NULL,
                 work_dates TEXT[] NOT NULL,
@@ -75,11 +78,11 @@ def init_db() -> None:
             )
         """)
         cursor.execute("""
-            CREATE INDEX idx_invoice_history_jobsite
+            CREATE INDEX IF NOT EXISTS idx_invoice_history_jobsite
             ON invoice_history (jobsite_id)
         """)
         cursor.execute("""
-            CREATE INDEX idx_invoice_history_pairs
+            CREATE INDEX IF NOT EXISTS idx_invoice_history_pairs
             ON invoice_history USING GIN (date_foreman_pairs)
         """)
 
@@ -108,4 +111,7 @@ def init_db() -> None:
             )
         """)
 
-    print("Database initialized: customer_mapping_overrides, invoice_history, lmn_credentials, item_mapping_overrides tables ready")
+    logger.info(
+        "Database initialized: customer_mapping_overrides, invoice_history, "
+        "lmn_credentials, item_mapping_overrides tables ready"
+    )

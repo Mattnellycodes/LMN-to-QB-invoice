@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import time
 from datetime import datetime
 from io import BytesIO
 from typing import Any, Dict, List
@@ -21,6 +23,8 @@ from src.mapping.customer_mapping import (
 )
 from src.mapping.item_mapping import build_item_refs, build_normalized_cache
 from src.parsing.pdf_parser import SHOP_JOBSITE_ID, PdfParseError, parse_pdf
+
+logger = logging.getLogger(__name__)
 
 
 class ProcessingError(Exception):
@@ -52,7 +56,10 @@ def check_for_duplicates(invoices: List[Dict[str, Any]]) -> List[Dict[str, Any]]
                     }
                 )
     except Exception:
+        logger.exception("Duplicate detection failed; returning no duplicates")
         return []
+    if duplicates:
+        logger.info("Duplicate detection: %d overlapping prior invoices", len(duplicates))
     return duplicates
 
 
@@ -66,15 +73,33 @@ def process_uploaded_pdf(filename: str, content: BytesIO) -> Dict[str, Any]:
     if not filename.lower().endswith(".pdf"):
         raise ProcessingError("Upload must be a .pdf file.")
 
+    t0 = time.monotonic()
+    content.seek(0, 2)
+    size_bytes = content.tell()
+    content.seek(0)
+    logger.info("Processing upload: filename=%s size=%d bytes", filename, size_bytes)
+
     try:
-        content.seek(0)
         report = parse_pdf(content)
     except PdfParseError as e:
+        logger.warning("PDF parse failed for %s: %s", filename, e)
         raise ProcessingError(str(e))
     except Exception as e:
+        logger.exception("Unexpected error reading PDF %s", filename)
         raise ProcessingError(f"Could not read PDF: {e}")
+    logger.info(
+        "Parsed PDF: customers=%d total_tasks=%d (%dms)",
+        len(report.customers),
+        len(report.tasks),
+        int((time.monotonic() - t0) * 1000),
+    )
 
     allocation = compute(report)
+    logger.info(
+        "Allocation: shop_pool_entries=%d rollups=%d",
+        len(allocation.shop_pool),
+        len(allocation.rollups),
+    )
     shop_missing = (
         SHOP_JOBSITE_ID not in report.customers or not allocation.shop_pool
     )
@@ -98,9 +123,16 @@ def process_uploaded_pdf(filename: str, content: BytesIO) -> Dict[str, Any]:
 
     mappings = load_mapping_from_lmn_api()
     lmn_mapping_count = len(mappings)
+    logger.info("Loaded %d customer mappings from LMN", lmn_mapping_count)
 
     jobsite_ids = [inv.jobsite_id for inv in invoices]
     unmapped_ids = find_unmapped_jobsites(jobsite_ids, mappings)
+    if unmapped_ids:
+        logger.info(
+            "Unmapped jobsites: %d of %d",
+            len(unmapped_ids),
+            len(jobsite_ids),
+        )
 
     unmapped_jobsites: list[dict] = []
     for inv in invoices:
@@ -128,6 +160,18 @@ def process_uploaded_pdf(filename: str, content: BytesIO) -> Dict[str, Any]:
     duplicates = check_for_duplicates(all_invoices)
 
     item_refs, fallback_lookup_names, fallback_error = _resolve_line_items(all_invoices)
+
+    logger.info(
+        "Upload ready: invoices=%d mapped=%d fallback_lookups=%d "
+        "zero_price=%d duplicates=%d total=$%.2f (%dms end-to-end)",
+        len(invoices),
+        mapped_count,
+        len(fallback_lookup_names),
+        len(zero_price_items),
+        len(duplicates),
+        total_amount,
+        int((time.monotonic() - t0) * 1000),
+    )
 
     return {
         "invoices": all_invoices,
@@ -176,21 +220,25 @@ def _resolve_line_items(
 
         access_token, realm_id = get_qbo_credentials()
         item_cache = fetch_all_items(access_token, realm_id)
+        logger.info("Fetched QBO item catalog: %d items", len(item_cache))
         try:
             fallback_ref = get_fallback_item_ref(item_cache)
         except ItemMappingError as e:
             fallback_error = str(e)
+            logger.warning("QBO fallback item missing: %s", e)
     except Exception as e:
         fallback_error = fallback_error or (
             "QBO item catalog could not be loaded "
             f"(per-line items will use the fallback): {e}"
         )
+        logger.exception("Failed to load QBO item catalog")
 
     try:
         from src.db.item_overrides import get_item_overrides
 
         db_overrides = get_item_overrides()
     except Exception:
+        logger.exception("Failed to load item overrides from DB")
         db_overrides = {}
 
     if fallback_ref is None:
@@ -262,12 +310,14 @@ def create_qbo_invoices(
     access_token, realm_id = get_qbo_credentials()
     class_ref = get_class_by_name(access_token, realm_id, DEFAULT_CLASS_NAME)
     if class_ref is None:
+        logger.error("Required QBO Class '%s' not found", DEFAULT_CLASS_NAME)
         raise ClassMappingError(
             f"QBO Class named '{DEFAULT_CLASS_NAME}' is required on every "
             "invoice line. Create it in QuickBooks (Settings → All Lists → "
             "Classes) before creating invoices."
         )
 
+    logger.info("Creating %d draft invoice(s) in QBO", len(invoices))
     results: list[dict] = []
 
     for inv_dict in invoices:
@@ -300,6 +350,21 @@ def create_qbo_invoices(
             item_refs=item_refs,
             class_ref=class_ref,
         )
+
+        if result.success:
+            logger.info(
+                "Created QBO invoice: jobsite=%s number=%s id=%s total=$%.2f",
+                result.jobsite_id,
+                result.invoice_number,
+                result.invoice_id,
+                result.total or 0.0,
+            )
+        else:
+            logger.error(
+                "QBO invoice creation failed: jobsite=%s error=%s",
+                result.jobsite_id,
+                result.error,
+            )
 
         results.append(
             {
