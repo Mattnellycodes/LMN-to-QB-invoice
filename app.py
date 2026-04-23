@@ -23,12 +23,51 @@ from flask import (
     url_for,
 )
 
+from src import results_store
 from src.logging_config import configure_logging
 
 load_dotenv()
 configure_logging()
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Server-side result storage
+# Full processing/invoice result dicts exceed the ~4 KB Flask cookie cap and
+# were silently dropped. The session now carries only a UUID pointing to a
+# filesystem-backed JSON blob. See src/results_store.py.
+# =============================================================================
+
+
+def _get_processing_result(default=None):
+    """Load the current processing result from the server-side store."""
+    return results_store.load(session.get("results_key")) or default
+
+
+def _set_processing_result(result):
+    """Persist the processing result, creating or updating its store entry."""
+    key = session.get("results_key")
+    if key:
+        results_store.update(key, result)
+    else:
+        session["results_key"] = results_store.save(result)
+
+
+def _clear_processing_result():
+    results_store.delete(session.pop("results_key", None))
+
+
+def _get_invoice_result():
+    return results_store.load(session.get("invoice_results_key"))
+
+
+def _set_invoice_result(result):
+    key = session.get("invoice_results_key")
+    if key:
+        results_store.update(key, result)
+    else:
+        session["invoice_results_key"] = results_store.save(result)
 
 app = Flask(__name__)
 
@@ -325,7 +364,8 @@ def upload_post():
         content = io.BytesIO(pdf_file.read())
         result = process_uploaded_pdf(pdf_file.filename, content)
 
-        session["processing_result"] = result
+        _clear_processing_result()
+        _set_processing_result(result)
 
         if result.get("unmapped_jobsites"):
             return redirect(url_for("mapping"))
@@ -349,8 +389,12 @@ def upload_post():
 @require_qbo_auth
 def mapping():
     """Show unmapped jobsites and allow mapping to QBO customers."""
-    result = session.get("processing_result")
+    result = _get_processing_result()
     if not result:
+        logger.warning(
+            "GET /mapping hit with no stored result (key=%s)",
+            session.get("results_key"),
+        )
         flash("No data to map. Please upload files first.", "warning")
         return redirect(url_for("upload"))
 
@@ -412,23 +456,20 @@ def mapping_save():
         )
         save_customer_override(mapping)
 
-        # Update session data
-        result = session.get("processing_result", {})
+        result = _get_processing_result(default={})
 
-        # Remove from unmapped list
         unmapped = result.get("unmapped_jobsites", [])
         result["unmapped_jobsites"] = [
             j for j in unmapped if j["jobsite_id"] != jobsite_id
         ]
 
-        # Add qbo_customer_id and qbo_display_name to the invoice for this jobsite
         for inv in result.get("invoices", []):
             if inv["jobsite_id"] == jobsite_id:
                 inv["qbo_customer_id"] = qbo_customer_id
                 inv["qbo_display_name"] = qbo_display_name
                 break
 
-        session["processing_result"] = result
+        _set_processing_result(result)
 
         return jsonify({"success": True})
     except Exception as e:
@@ -440,10 +481,10 @@ def mapping_save():
 @require_qbo_auth
 def mapping_skip():
     """Skip remaining unmapped jobsites and proceed to results."""
-    result = session.get("processing_result", {})
+    result = _get_processing_result(default={})
     result["skipped_jobsites"] = result.get("unmapped_jobsites", [])
     result["unmapped_jobsites"] = []
-    session["processing_result"] = result
+    _set_processing_result(result)
     return jsonify({"success": True, "redirect": url_for("results")})
 
 
@@ -461,8 +502,12 @@ def item_mapping():
     valid ItemRef via the fallback; this page lets the user upgrade any to
     a dedicated QBO Product/Service for cleaner reporting.
     """
-    result = session.get("processing_result")
+    result = _get_processing_result()
     if not result:
+        logger.warning(
+            "GET /item-mapping hit with no stored result (key=%s)",
+            session.get("results_key"),
+        )
         flash("No data to map. Please upload files first.", "warning")
         return redirect(url_for("upload"))
 
@@ -518,7 +563,7 @@ def item_mapping_save():
     try:
         save_item_override(lmn_name, qbo_item_id, qbo_item_name)
 
-        result = session.get("processing_result", {})
+        result = _get_processing_result(default={})
 
         item_refs = result.get("item_refs", {})
         item_refs[lmn_name] = {"value": qbo_item_id, "name": qbo_item_name}
@@ -539,7 +584,7 @@ def item_mapping_save():
         summary["fallback_items"] = len(fallback_names)
         result["summary"] = summary
 
-        session["processing_result"] = result
+        _set_processing_result(result)
 
         return jsonify({"success": True, "remaining": len(fallback_names)})
     except Exception as e:
@@ -556,8 +601,20 @@ def item_mapping_save():
 @require_qbo_auth
 def results():
     """Show processing results and invoice preview."""
-    result = session.get("processing_result")
+    key = session.get("results_key")
+    result = results_store.load(key)
     if not result:
+        if key:
+            logger.warning(
+                "GET /results: results_key=%s present but no result loaded "
+                "(file missing, expired, or unreadable — see prior warnings)",
+                key,
+            )
+        else:
+            logger.warning(
+                "GET /results: no results_key in session — user landed here "
+                "without uploading or session cookie was lost"
+            )
         flash("No data to display. Please upload files first.", "warning")
         return redirect(url_for("upload"))
 
@@ -610,8 +667,12 @@ def update_zero_price_items():
     """Receive user-entered prices for zero-price items and update invoices."""
     from src.invoice.line_items import calculate_direct_payment_fee
 
-    result = session.get("processing_result")
+    result = _get_processing_result()
     if not result:
+        logger.warning(
+            "POST /update-zero-price-items hit with no stored result (key=%s)",
+            session.get("results_key"),
+        )
         flash("No data to display. Please upload files first.", "warning")
         return redirect(url_for("upload"))
 
@@ -700,7 +761,7 @@ def update_zero_price_items():
     summary["fallback_items"] = len(fallback_names)
     result["summary"] = summary
 
-    session["processing_result"] = result
+    _set_processing_result(result)
 
     return redirect(url_for("results"))
 
@@ -711,8 +772,12 @@ def create_invoices():
     """Create draft invoices in QuickBooks."""
     from src.web_processing import create_qbo_invoices
 
-    result = session.get("processing_result")
+    result = _get_processing_result()
     if not result or not result.get("invoices"):
+        logger.warning(
+            "POST /create-invoices: missing or empty result (key=%s)",
+            session.get("results_key"),
+        )
         flash("No invoices to create.", "warning")
         return redirect(url_for("results"))
 
@@ -746,7 +811,7 @@ def create_invoices():
 
     try:
         invoice_results = create_qbo_invoices(mapped_invoices, item_refs)
-        session["invoice_results"] = invoice_results
+        _set_invoice_result(invoice_results)
         return redirect(url_for("invoice_results"))
     except Exception as e:
         flash(f"Error creating invoices: {e}", "error")
@@ -757,8 +822,12 @@ def create_invoices():
 @require_qbo_auth
 def invoice_results():
     """Show results of invoice creation."""
-    results = session.get("invoice_results")
+    results = _get_invoice_result()
     if not results:
+        logger.warning(
+            "GET /invoice-results: no stored invoice result (key=%s)",
+            session.get("invoice_results_key"),
+        )
         flash("No invoice results to display.", "warning")
         return redirect(url_for("index"))
 

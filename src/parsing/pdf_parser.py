@@ -292,7 +292,13 @@ def _walk(pages: list[list[list[tuple[float, float, str]]]]) -> ParsedReport:
                     try:
                         current_task.task_man_hrs = float(hrs)
                     except ValueError:
-                        pass
+                        logger.warning(
+                            "Skipping invalid Task Man Hrs=%r on task=%r "
+                            "jobsite=%s",
+                            hrs,
+                            current_task.task_name,
+                            current_task.jobsite_id,
+                        )
                 continue
 
             if "End Time:" in s:
@@ -336,6 +342,15 @@ def _walk(pages: list[list[list[tuple[float, float, str]]]]) -> ParsedReport:
                             total_price=parts[-1],
                         )
                     )
+                elif len(parts) >= 2:
+                    logger.warning(
+                        "Skipping malformed service row (%d tokens) on task=%r "
+                        "jobsite=%s: %s",
+                        len(parts),
+                        current_task.task_name,
+                        current_task.jobsite_id,
+                        " | ".join(parts),
+                    )
                 continue
 
             if in_rates_table:
@@ -351,6 +366,15 @@ def _walk(pages: list[list[list[tuple[float, float, str]]]]) -> ParsedReport:
                             rate=parts[-2],
                             total_price=parts[-1],
                         )
+                    )
+                elif len(parts) >= 2:
+                    logger.warning(
+                        "Skipping malformed rate row (%d tokens) on task=%r "
+                        "jobsite=%s: %s",
+                        len(parts),
+                        current_task.task_name,
+                        current_task.jobsite_id,
+                        " | ".join(parts),
                     )
                 continue
 
