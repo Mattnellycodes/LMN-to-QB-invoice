@@ -61,6 +61,12 @@ def test_harris_monday_general_maintenance_task(report):
     assert len(task.services) >= 9
 
 
+def test_notes_captured_for_billable_tasks(report):
+    """Sample PDF yields the expected count of non-empty crew notes."""
+    with_notes = [t for t in report.tasks if t.notes]
+    assert len(with_notes) == 22
+
+
 def test_page_break_continuation_not_dropped(report):
     """Shop tasks whose fields span a page break must still be captured."""
     shop_tasks = [t for t in report.tasks if t.jobsite_id == SHOP_JOBSITE_ID]

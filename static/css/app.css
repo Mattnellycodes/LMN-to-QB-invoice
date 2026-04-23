@@ -690,6 +690,30 @@ tr:hover td {
     color: var(--color-text);
 }
 
+.invoice-crew-notes {
+    margin: 10px 0 16px;
+    padding: 10px 14px;
+    background: var(--color-accent-soft);
+    border: 1px solid var(--color-accent);
+    border-radius: var(--radius);
+    font-size: 0.88rem;
+    color: var(--color-text);
+}
+
+.invoice-crew-notes ul {
+    margin: 6px 0 0;
+    padding-left: 18px;
+}
+
+.invoice-crew-notes li {
+    margin-bottom: 4px;
+}
+
+.invoice-crew-notes-meta {
+    color: var(--color-text-muted);
+    margin-right: 8px;
+}
+
 .zero-price-inputs {
     display: grid;
     grid-template-columns: 2fr 1fr 1fr;

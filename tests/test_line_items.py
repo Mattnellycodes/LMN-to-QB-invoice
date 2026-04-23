@@ -142,6 +142,26 @@ def test_build_invoice_aggregates_labor_and_items():
     ])
 
 
+def test_build_invoice_copies_task_notes_from_rollup():
+    rollup = JobsiteRollup(
+        jobsite_id="ABC",
+        customer_name="Customer A",
+        hourly_rate=75.0,
+    )
+    rollup.work_by_date_foreman[("Mon-Apr-13-2026", "Jenna")] = 4.0
+    rollup.task_notes = [
+        {"date": "Mon-Apr-13-2026", "foreman": "Jenna", "notes": "Prune back shrub"},
+        {"date": "Tue-Apr-14-2026", "foreman": "Cassie", "notes": "Finished pruning"},
+    ]
+
+    inv = build_invoice(rollup, INCLUDED, invoice_date="2026-04-19")
+
+    assert inv.task_notes == rollup.task_notes
+    # Guard against aliasing — must be a copy so later mutation doesn't bleed.
+    assert inv.task_notes is not rollup.task_notes
+    assert inv.task_notes[0] is not rollup.task_notes[0]
+
+
 def test_load_included_items_reads_config_file():
     """Sanity check that the real config file loads with the expected names."""
     items = load_included_items()

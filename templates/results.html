@@ -194,6 +194,19 @@
     {% for invoice in result.invoices %}
     <div class="invoice-detail-card">
         <h4>{{ invoice.qbo_display_name or invoice.customer_name }} - {{ invoice.jobsite_name }}</h4>
+        {% if invoice.task_notes %}
+        <div class="invoice-crew-notes">
+            <strong>Crew notes</strong>
+            <ul>
+                {% for n in invoice.task_notes %}
+                <li>
+                    <span class="invoice-crew-notes-meta">{{ n.date }} &middot; {{ n.foreman }}</span>
+                    <span class="invoice-crew-notes-text">{{ n.notes }}</span>
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
         <table>
             <thead>
                 <tr>

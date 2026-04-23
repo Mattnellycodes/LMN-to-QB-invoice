@@ -288,6 +288,14 @@ def invoice_to_dict(invoice: InvoiceData) -> Dict[str, Any]:
         "work_dates": [str(d) for d in invoice.work_dates],
         "foremen": [str(f) for f in invoice.foremen],
         "date_foreman_pairs": [str(p) for p in invoice.date_foreman_pairs],
+        "task_notes": [
+            {
+                "date": str(n.get("date", "")),
+                "foreman": str(n.get("foreman", "")),
+                "notes": str(n.get("notes", "")),
+            }
+            for n in invoice.task_notes
+        ],
     }
 
 

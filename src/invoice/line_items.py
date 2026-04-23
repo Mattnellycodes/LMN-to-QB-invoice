@@ -68,6 +68,9 @@ class InvoiceData:
     foremen: list[str] = field(default_factory=list)
     # "<date>|<foreman>" strings — the canonical duplicate-detection key.
     date_foreman_pairs: list[str] = field(default_factory=list)
+    # Per-task crew notes for this jobsite, shown on the invoice preview.
+    # Each entry: {"date": str, "foreman": str, "notes": str}.
+    task_notes: list[dict] = field(default_factory=list)
 
 
 def load_included_items(path: Path = INCLUDED_ITEMS_PATH) -> frozenset[str]:
@@ -222,6 +225,7 @@ def build_invoice(
         work_dates=list(rollup.work_dates),
         foremen=list(rollup.foremen),
         date_foreman_pairs=pairs,
+        task_notes=[dict(n) for n in rollup.task_notes],
     )
 
     total_hours = rollup.total_billable_hours
