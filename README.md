@@ -13,8 +13,9 @@ For the reporting period covered by the uploaded PDF, the app:
 
 1. Parses all tasks (customer work and *SHOP overhead).
 2. Pools CostCode 900 hours under `*SHOP` keyed by `(date, foreman)`.
-3. For each `(date, foreman)`, splits the pool equally across the billable
-   jobsites that foreman worked that day.
+3. For each `(date, foreman)`, splits the pool across the billable jobsites
+   that foreman worked that day, weighted by each jobsite's billable work
+   hours (equal split as fallback when all work hours are zero).
 4. Aggregates per-jobsite work plus allocated drive into one invoice per
    jobsite, covering all dates in the PDF.
 5. Adds service/material line items (deduped by description) with

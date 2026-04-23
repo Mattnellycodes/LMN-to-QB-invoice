@@ -62,7 +62,7 @@ def test_shop_pool_sums_by_date_and_foreman():
     assert pool[("Tue-Apr-14-2026", "Jenna")] == pytest.approx(4.0)
 
 
-def test_one_foreman_three_jobs_splits_equally():
+def test_one_foreman_three_jobs_splits_weighted():
     tasks = [
         _shop_task("Mon", "Jenna", 6.0),
         _work_task("Mon", "Jenna", 10.0, "A", "Cust A"),
@@ -70,10 +70,10 @@ def test_one_foreman_three_jobs_splits_equally():
         _work_task("Mon", "Jenna", 3.0, "C", "Cust C"),
     ]
     result = compute(_report(tasks))
-    # 6h shop / 3 jobs = 2h each
-    assert result.rollups["A"].allocated_drive_hours == pytest.approx(2.0)
-    assert result.rollups["B"].allocated_drive_hours == pytest.approx(2.0)
-    assert result.rollups["C"].allocated_drive_hours == pytest.approx(2.0)
+    # Total work hours = 18; 6h shop allocated by ratio.
+    assert result.rollups["A"].allocated_drive_hours == pytest.approx(6 * 10 / 18)
+    assert result.rollups["B"].allocated_drive_hours == pytest.approx(6 * 5 / 18)
+    assert result.rollups["C"].allocated_drive_hours == pytest.approx(6 * 3 / 18)
 
 
 def test_multi_day_aggregates_into_same_jobsite_invoice():
@@ -89,14 +89,15 @@ def test_multi_day_aggregates_into_same_jobsite_invoice():
     ]
     result = compute(_report(tasks))
 
-    # A: Mon share 4/2=2, Tue share 2/1=2, total 4. Work hours 8+6=14.
+    # A: Mon weight 8/(8+4)=2/3 → share 4*2/3≈2.667, Tue share 2*6/6=2.0,
+    # total ≈4.667. Work hours 8+6=14.
     a = result.rollups["A"]
     assert a.work_hours == pytest.approx(14.0)
-    assert a.allocated_drive_hours == pytest.approx(4.0)
-    # B: Mon share 2, no Tue presence.
+    assert a.allocated_drive_hours == pytest.approx(4 * 8 / 12 + 2.0)
+    # B: Mon weight 4/12 → share 4*4/12≈1.333, no Tue presence.
     b = result.rollups["B"]
     assert b.work_hours == pytest.approx(4.0)
-    assert b.allocated_drive_hours == pytest.approx(2.0)
+    assert b.allocated_drive_hours == pytest.approx(4 * 4 / 12)
 
 
 def test_foreman_with_no_billable_jobs_loses_shop_allocation():
@@ -133,11 +134,23 @@ def test_allocation_breakdown_captures_each_day():
     # Two allocation rows for Job A — one per day.
     dates = sorted(row.date for row in breakdown)
     assert dates == ["Mon", "Tue"]
-    # Mon shop 3 / 2 jobsites = 1.5; Tue shop 1 / 1 jobsite = 1.0
+    # Mon: A=4h, B=2h (total 6); A share = 3 * 4/6 = 2.0. Tue: A=3h alone = 1.0.
     mon = next(r for r in breakdown if r.date == "Mon")
     tue = next(r for r in breakdown if r.date == "Tue")
-    assert mon.share == pytest.approx(1.5)
+    assert mon.share == pytest.approx(2.0)
     assert tue.share == pytest.approx(1.0)
+
+
+def test_zero_work_hours_falls_back_to_equal_split():
+    """Degenerate case: foreman has billable tasks with 0 hours at every jobsite."""
+    tasks = [
+        _shop_task("Mon", "Jenna", 4.0),
+        _work_task("Mon", "Jenna", 0.0, "A", "Cust A"),
+        _work_task("Mon", "Jenna", 0.0, "B", "Cust B"),
+    ]
+    result = compute(_report(tasks))
+    assert result.rollups["A"].allocated_drive_hours == pytest.approx(2.0)
+    assert result.rollups["B"].allocated_drive_hours == pytest.approx(2.0)
 
 
 def test_hourly_rate_picked_up_from_first_non_zero_rate():

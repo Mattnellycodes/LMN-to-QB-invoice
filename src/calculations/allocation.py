@@ -3,8 +3,10 @@
 Policy (confirmed by user):
   - Shop pool = all tasks under the *SHOP jobsite (CostCode 900 — Land Time
     and Drive Time), keyed by (work_date, foreman).
-  - For each (date, foreman) in the shop pool, split hours EQUALLY across
-    the unique billable jobsites that same foreman worked that day.
+  - For each (date, foreman) in the shop pool, split hours proportionally
+    to each billable jobsite's work hours that day:
+        share(jobsite) = shop_hours * work_hours(jobsite) / Σ work_hours
+    Fallback: if Σ work_hours is 0 (degenerate), split equally.
   - Invoices aggregate across multiple days: one invoice per jobsite
     collects every (date, foreman) row plus that jobsite's share of shop
     hours from each day its foremen appeared.
@@ -134,9 +136,9 @@ def compute(report: ParsedReport) -> AllocationResult:
                     rollup.hourly_rate_name = rate_row.description
                     break
 
-    # Pass 2: allocate shop hours.
-    # For each (date, foreman), find unique billable jobsites where that
-    # foreman worked that day; split shop hours equally.
+    # Pass 2: allocate shop hours, weighted by each jobsite's billable work
+    # hours for that (date, foreman). Fallback to equal split if total work
+    # hours are zero.
     jobsites_by_day_foreman: dict[tuple[str, str], set[str]] = defaultdict(set)
     for jobsite_id, rollup in rollups.items():
         for (date, foreman) in rollup.work_by_date_foreman:
@@ -146,17 +148,28 @@ def compute(report: ParsedReport) -> AllocationResult:
         shop_hours = shop_pool.get((date, foreman), 0.0)
         if shop_hours <= 0 or not jobsites:
             continue
-        share = shop_hours / len(jobsites)
+        weights = {
+            jid: rollups[jid].work_by_date_foreman.get((date, foreman), 0.0)
+            for jid in jobsites
+        }
+        total_weight = sum(weights.values())
         shared = sorted(jobsites)
-        logger.debug(
-            "Allocating: date=%s foreman=%s shop_hrs=%.2f jobsites=%d share=%.2f",
-            date,
-            foreman,
-            shop_hours,
-            len(jobsites),
-            share,
-        )
         for jobsite_id in jobsites:
+            if total_weight > 0:
+                share = shop_hours * weights[jobsite_id] / total_weight
+            else:
+                share = shop_hours / len(jobsites)
+            logger.debug(
+                "Allocating: date=%s foreman=%s jobsite=%s shop_hrs=%.2f "
+                "weight=%.2f total_weight=%.2f share=%.2f",
+                date,
+                foreman,
+                jobsite_id,
+                shop_hours,
+                weights[jobsite_id],
+                total_weight,
+                share,
+            )
             rollup = rollups[jobsite_id]
             rollup.allocated_drive_hours += share
             rollup.allocation_breakdown.append(
