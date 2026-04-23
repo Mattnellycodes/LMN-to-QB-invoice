@@ -92,6 +92,68 @@ class TestGetJobMatching:
                 with pytest.raises(Exception):
                     get_job_matching()
 
+    def test_retries_on_5xx_then_succeeds(self):
+        """Transient 5xx responses are retried and recovered data is returned."""
+        import requests as _requests
+
+        fail_response = MagicMock()
+        fail_response.status_code = 500
+        http_error = _requests.HTTPError("500 Server Error")
+        http_error.response = fail_response
+        fail_response.raise_for_status.side_effect = http_error
+
+        ok_response = MagicMock()
+        ok_response.raise_for_status.return_value = None
+        ok_response.json.return_value = SAMPLE_LMN_RESPONSE
+
+        with patch.dict("os.environ", {"LMN_API_TOKEN": "t"}, clear=True):
+            with patch("src.lmn.api.time.sleep"):
+                with patch(
+                    "src.lmn.api.requests.get",
+                    side_effect=[fail_response, ok_response],
+                ) as mock_get:
+                    result = get_job_matching()
+                    assert result == SAMPLE_LMN_ITEMS
+                    assert mock_get.call_count == 2
+
+    def test_gives_up_after_max_attempts_on_persistent_5xx(self):
+        """After MAX_ATTEMPTS 5xx responses, the last exception propagates."""
+        import requests as _requests
+
+        fail_response = MagicMock()
+        fail_response.status_code = 500
+        http_error = _requests.HTTPError("500 Server Error")
+        http_error.response = fail_response
+        fail_response.raise_for_status.side_effect = http_error
+
+        with patch.dict("os.environ", {"LMN_API_TOKEN": "t"}, clear=True):
+            with patch("src.lmn.api.time.sleep"):
+                with patch(
+                    "src.lmn.api.requests.get", return_value=fail_response
+                ) as mock_get:
+                    with pytest.raises(_requests.HTTPError):
+                        get_job_matching()
+                    assert mock_get.call_count == 3  # _MAX_ATTEMPTS
+
+    def test_does_not_retry_on_4xx(self):
+        """4xx responses are client errors and should not be retried."""
+        import requests as _requests
+
+        fail_response = MagicMock()
+        fail_response.status_code = 401
+        http_error = _requests.HTTPError("401 Unauthorized")
+        http_error.response = fail_response
+        fail_response.raise_for_status.side_effect = http_error
+
+        with patch.dict("os.environ", {"LMN_API_TOKEN": "t"}, clear=True):
+            with patch("src.lmn.api.time.sleep"):
+                with patch(
+                    "src.lmn.api.requests.get", return_value=fail_response
+                ) as mock_get:
+                    with pytest.raises(_requests.HTTPError):
+                        get_job_matching()
+                    assert mock_get.call_count == 1
+
 
 class TestBuildMappingFromLmn:
     """Tests for build_mapping_from_lmn function."""

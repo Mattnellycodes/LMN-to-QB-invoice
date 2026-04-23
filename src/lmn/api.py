@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Dict, List, Optional
 
 import requests
@@ -12,6 +13,12 @@ from src.mapping.customer_mapping import CustomerMapping
 logger = logging.getLogger(__name__)
 
 LMN_API_URL = "https://accounting-api.golmn.com/qbdata/jobmatching"
+
+# Retry policy for transient LMN failures (5xx / network errors).
+# 4xx responses are not retried — those indicate client-side problems
+# (auth, bad request) that will not self-heal.
+_MAX_ATTEMPTS = 3
+_BACKOFF_SECONDS = (1.0, 2.0)  # waits between attempts: 1→2, 2→3
 
 
 def get_lmn_token() -> Optional[str]:
@@ -47,14 +54,45 @@ def get_job_matching() -> List[Dict]:
         "Content-Type": "application/json",
     }
 
-    logger.debug("GET %s", LMN_API_URL)
-    response = requests.get(LMN_API_URL, headers=headers, timeout=30)
-    response.raise_for_status()
+    last_exception: Optional[Exception] = None
+    for attempt in range(1, _MAX_ATTEMPTS + 1):
+        try:
+            logger.debug(
+                "GET %s (attempt %d/%d)", LMN_API_URL, attempt, _MAX_ATTEMPTS
+            )
+            response = requests.get(LMN_API_URL, headers=headers, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            items = data.get("lmnitems", [])
+            if attempt > 1:
+                logger.warning(
+                    "LMN job matching recovered on attempt %d/%d after "
+                    "transient failure: %s",
+                    attempt,
+                    _MAX_ATTEMPTS,
+                    last_exception,
+                )
+            logger.info("LMN job matching returned %d items", len(items))
+            return items
+        except requests.HTTPError as e:
+            status = e.response.status_code if e.response is not None else None
+            if status is None or status < 500:
+                raise
+            last_exception = e
+        except (requests.ConnectionError, requests.Timeout) as e:
+            last_exception = e
 
-    data = response.json()
-    items = data.get("lmnitems", [])
-    logger.info("LMN job matching returned %d items", len(items))
-    return items
+        if attempt < _MAX_ATTEMPTS:
+            backoff = _BACKOFF_SECONDS[attempt - 1]
+            logger.debug(
+                "LMN request failed (%s); retrying in %.1fs",
+                last_exception,
+                backoff,
+            )
+            time.sleep(backoff)
+
+    assert last_exception is not None
+    raise last_exception
 
 
 def build_mapping_from_lmn(lmn_data: List[Dict]) -> Dict[str, CustomerMapping]:
