@@ -61,3 +61,6 @@ data/
 
 # Sample Sheets
 Sample Time Sheets
+
+# Local admin/maintenance scripts (not shipped)
+scripts/

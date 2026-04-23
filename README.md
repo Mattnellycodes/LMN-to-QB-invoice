@@ -65,7 +65,7 @@ Open <http://localhost:5000>.
 ### 4. Upload the PDF
 
 From LMN, export **Job History (All Details)** for the target week, filtered
-to the T-Town group. The report must include the `*SHOP` jobsite.
+to the T-Town group.
 
 1. Go to the Upload page.
 2. Drop or select the PDF.
@@ -97,11 +97,14 @@ and crew notes so you can decide whether to price it or ignore it.
 ### Drive-Time Allocation
 
 Shop pool = total `CostCode 900` (Land Time + Drive Time) under `*SHOP`.
-Per-day, per-foreman:
+Per-day, per-foreman, hours are split proportionally by each jobsite's
+billable work hours that day (equal split as fallback when all work hours
+are zero):
 
 ```
 Allocated Drive Time per Jobsite = Shop Hours(date, foreman)
-                                  / |Jobsites(date, foreman)|
+                                  × Work Hours(date, foreman, jobsite)
+                                  / Σ Work Hours(date, foreman, *)
 ```
 
 ### Billable Hours
@@ -156,8 +159,7 @@ config/
 └── included_items.txt        # Bundled-item allow-list ($0 auto-drop)
 ```
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) and [CLAUDE.md](CLAUDE.md) for
-further detail.
+See [CLAUDE.md](CLAUDE.md) for further detail.
 
 ## Troubleshooting
 
