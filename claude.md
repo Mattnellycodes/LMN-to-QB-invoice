@@ -1,6 +1,6 @@
 CLAUDE.md - LMN to QuickBooks Invoice Automation
 Project Overview
-Automates the creation of QuickBooks Online draft invoices from a single LMN "Job History (All Details)" PDF. The tool parses the PDF, allocates shop/overhead hours (CostCode 900) across billable jobsites, builds one invoice per jobsite aggregated over multiple days, and posts drafts to QBO for manual review.
+Automates the creation of QuickBooks Online draft invoices from one or more LMN "Job History (All Details)" PDFs. The tool parses the uploaded PDF batch, allocates shop/overhead hours (CostCode 900) across billable jobsites, builds one invoice per jobsite aggregated over multiple days, and posts drafts to QBO for manual review.
 See docs/IMPLEMENTATION_PLAN.md for detailed technical specifications.
 Code Design Philosophy
 Modular Design
@@ -47,7 +47,7 @@ Billable Hours Calculation
 Billable Hours per Jobsite = Sum(CostCode 200 task hours) + Allocated Drive Time
 Invoice Aggregation
 One invoice per jobsite, collecting every (date, foreman) row and the jobsite's
-allocated drive across all days covered by the uploaded PDF.
+allocated drive across all days covered by the uploaded PDF batch.
 Included Items Allow-List
 `config/included_items.txt` lists exact service names that are bundled in
 customer package prices. When these names appear with `Total Price = $0`, they
@@ -99,7 +99,7 @@ src/
     mapping/item_mapping.py   # QBO item/service name mapping
     db/                       # Invoice history, customer overrides, item overrides, LMN credentials
     logging_config.py         # Central logging setup (LOG_LEVEL env var, request-id filter)
-    web_processing.py         # Web-facing entry: process_uploaded_pdf
+    web_processing.py         # Web-facing entries: process_uploaded_pdf(s)
     main.py                   # Deprecated stub (CLI removed — web app only)
 app.py                        # Flask web application
 config/
@@ -108,7 +108,7 @@ config/
 templates/
     base.html                 # Base template with styling
     index.html                # Home/connection status
-    upload.html               # Single-PDF drag-and-drop upload
+    upload.html               # Multi-PDF drag-and-drop upload
     mapping.html              # Customer mapping UI
     item_mapping.html         # QBO item/service mapping UI
     results.html              # Invoice preview + zero-price modal (with crew notes)
@@ -163,9 +163,10 @@ ruff check .
 # Format code
 ruff format .
 
-# Web: single PDF upload
+# Web: one or more PDF uploads
 # Export "Job History (All Details)" from LMN for the target week,
-# filtered to the T-Town group. Upload the PDF; the app parses customers,
+# filtered to the T-Town group. Upload one or more PDFs; the app rejects
+# exact duplicate files and overlapping parsed tasks, then parses customers,
 # allocates shop hours, and builds one invoice per billable jobsite.
 Environment Setup
 Create a .env file (never commit this):
