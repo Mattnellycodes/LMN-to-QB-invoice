@@ -1,15 +1,15 @@
 # LMN to QuickBooks Invoice Automation
 
-Automates the creation of QuickBooks Online draft invoices from a single LMN
-"Job History (All Details)" PDF.
+Automates the creation of QuickBooks Online draft invoices from one or more LMN
+"Job History (All Details)" PDFs.
 
 ## What It Does
 
 ```
-LMN Job History PDF  ──►  Flask Web App  ──►  QBO Draft Invoices
+LMN Job History PDF(s)  ──►  Flask Web App  ──►  QBO Draft Invoices
 ```
 
-For the reporting period covered by the uploaded PDF, the app:
+For the reporting period covered by the uploaded PDF batch, the app:
 
 1. Parses all tasks (customer work and *SHOP overhead).
 2. Pools CostCode 900 hours under `*SHOP` keyed by `(date, foreman)`.
@@ -17,7 +17,7 @@ For the reporting period covered by the uploaded PDF, the app:
    that foreman worked that day, weighted by each jobsite's billable work
    hours (equal split as fallback when all work hours are zero).
 4. Aggregates per-jobsite work plus allocated drive into one invoice per
-   jobsite, covering all dates in the PDF.
+   jobsite, covering all dates in the uploaded PDF batch.
 5. Adds service/material line items (deduped by description) with
    `Total Price > $0`; items whose exact name is on the included-items
    allow-list with `$0` price are silently dropped; other `$0` items surface
@@ -62,16 +62,20 @@ python app.py
 
 Open <http://localhost:5000>.
 
-### 4. Upload the PDF
+### 4. Upload the PDF(s)
 
 From LMN, export **Job History (All Details)** for the target week, filtered
 to the T-Town group.
 
 1. Go to the Upload page.
-2. Drop or select the PDF.
+2. Drop or select one or more PDFs.
 3. The app previews invoices, shows any unmapped jobsites, and any $0 items
    that need a price.
 4. Click "Create Draft Invoices in QuickBooks".
+
+The app rejects exact duplicate PDF files and overlapping parsed tasks across
+different PDFs before building invoices, preventing the same visit from being
+counted twice in a multi-PDF batch.
 
 ### 5. Customer Mapping
 
@@ -111,7 +115,7 @@ Allocated Drive Time per Jobsite = Shop Hours(date, foreman)
 
 ```
 Billable Hours per Jobsite = sum(CostCode 200 hours) + Allocated Drive Time
-                             (across all dates in the PDF)
+                             (across all dates in the uploaded PDF batch)
 ```
 
 ### Direct Payment Fee

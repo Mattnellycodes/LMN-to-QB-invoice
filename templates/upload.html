@@ -3,9 +3,9 @@
 {% block title %}Upload Job History PDF{% endblock %}
 
 {% block content %}
-<h1>Upload LMN Job History PDF</h1>
+<h1>Upload LMN Job History PDFs</h1>
 
-<p>Upload the "Job History (All Details)" PDF exported from LMN. The report must include the
+<p>Upload one or more "Job History (All Details)" PDFs exported from LMN. The reports must include the
     <code>*SHOP</code> jobsite so drive/load time can be allocated across billable customers.</p>
 <p class="instructions-link">
     <a href="https://docs.google.com/document/d/1J_hYbSsxYORKLG77RrbUNZY6MmxMTLKOCaqxqx5VHog/edit?usp=sharing" target="_blank">View detailed instructions</a>
@@ -15,16 +15,16 @@
     <div class="upload-zone" id="drop-zone">
         <label for="pdf_file">
             <div class="upload-icon">&#128196;</div>
-            <h3>Drop the PDF here or click to browse</h3>
-            <p>Accepts a single .pdf file</p>
-            <input type="file" id="pdf_file" name="pdf_file" accept=".pdf">
+            <h3>Drop PDFs here or click to browse</h3>
+            <p>Accepts one or more .pdf files</p>
+            <input type="file" id="pdf_file" name="pdf_file" accept=".pdf" multiple>
         </label>
     </div>
 
     <div class="file-list" id="file-list" style="display: none;"></div>
 
     <div class="mt-20">
-        <button type="submit" class="btn btn-success" id="submit-btn" disabled>Process PDF</button>
+        <button type="submit" class="btn btn-success" id="submit-btn" disabled>Process PDFs</button>
     </div>
 </form>
 {% endblock %}
@@ -35,6 +35,7 @@
     const fileInput = document.getElementById('pdf_file');
     const fileList = document.getElementById('file-list');
     const submitBtn = document.getElementById('submit-btn');
+    let selectedFiles = [];
 
     dropZone.addEventListener('dragover', (e) => {
         e.preventDefault();
@@ -49,54 +50,90 @@
         e.preventDefault();
         dropZone.classList.remove('dragover');
         if (e.dataTransfer.files.length) {
-            assignFile(e.dataTransfer.files[0]);
+            assignFiles(Array.from(e.dataTransfer.files));
         }
     });
 
     fileInput.addEventListener('change', () => {
         if (fileInput.files.length) {
-            assignFile(fileInput.files[0]);
+            assignFiles(Array.from(fileInput.files));
         }
     });
 
-    function assignFile(file) {
-        if (!file.name.toLowerCase().endsWith('.pdf')) {
+    function assignFiles(files) {
+        const invalid = files.find((file) => !file.name.toLowerCase().endsWith('.pdf'));
+        if (invalid) {
             showError('Only .pdf files are accepted.');
             return;
         }
 
-        const dt = new DataTransfer();
-        dt.items.add(file);
-        fileInput.files = dt.files;
-
-        fileList.innerHTML = `
-            <div class="file-item">
-                <div class="file-info">
-                    <span class="file-name">${file.name}</span>
-                    <span class="file-badge badge-time">PDF</span>
-                </div>
-                <button type="button" class="file-remove">&times;</button>
-            </div>
-        `;
-        fileList.style.display = 'block';
-
-        fileList.querySelector('.file-remove').addEventListener('click', () => {
-            fileInput.value = '';
-            fileList.innerHTML = '';
-            fileList.style.display = 'none';
-            dropZone.classList.remove('has-files');
-            submitBtn.disabled = true;
-        });
+        selectedFiles = files;
+        syncFileInput();
+        renderFileList();
 
         dropZone.classList.add('has-files');
         dropZone.classList.remove('has-error');
-        submitBtn.disabled = false;
+        submitBtn.disabled = selectedFiles.length === 0;
+    }
+
+    function syncFileInput() {
+        const dt = new DataTransfer();
+        selectedFiles.forEach((file) => dt.items.add(file));
+        fileInput.files = dt.files;
+    }
+
+    function renderFileList() {
+        fileList.innerHTML = '';
+        selectedFiles.forEach((file, index) => {
+            const item = document.createElement('div');
+            item.className = 'file-item';
+
+            const info = document.createElement('div');
+            info.className = 'file-info';
+
+            const name = document.createElement('span');
+            name.className = 'file-name';
+            name.textContent = file.name;
+
+            const badge = document.createElement('span');
+            badge.className = 'file-badge badge-time';
+            badge.textContent = 'PDF';
+
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.className = 'file-remove';
+            remove.innerHTML = '&times;';
+            remove.addEventListener('click', () => {
+                selectedFiles.splice(index, 1);
+                syncFileInput();
+                renderFileList();
+            });
+
+            info.appendChild(name);
+            info.appendChild(badge);
+            item.appendChild(info);
+            item.appendChild(remove);
+            fileList.appendChild(item);
+        });
+
+        fileList.style.display = 'block';
+        dropZone.classList.toggle('has-files', selectedFiles.length > 0);
+        submitBtn.disabled = selectedFiles.length === 0;
+
+        if (selectedFiles.length === 0) {
+            fileInput.value = '';
+            fileList.style.display = 'none';
+            dropZone.classList.remove('has-files');
+        }
     }
 
     function showError(msg) {
+        selectedFiles = [];
+        fileInput.value = '';
         fileList.innerHTML = `<div class="file-item error"><div class="file-error">${msg}</div></div>`;
         fileList.style.display = 'block';
         dropZone.classList.add('has-error');
+        dropZone.classList.remove('has-files');
         submitBtn.disabled = true;
     }
 </script>

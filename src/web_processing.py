@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 import time
 from datetime import datetime
+from dataclasses import dataclass
+from hashlib import sha256
 from io import BytesIO
 from typing import Any, Dict, List
 
@@ -24,13 +26,27 @@ from src.mapping.customer_mapping import (
     load_mapping_from_lmn_api,
 )
 from src.mapping.item_mapping import build_item_refs, build_normalized_cache
-from src.parsing.pdf_parser import SHOP_JOBSITE_ID, PdfParseError, parse_pdf
+from src.parsing.pdf_parser import (
+    ParsedReport,
+    PdfParseError,
+    SHOP_JOBSITE_ID,
+    Task,
+    parse_pdf,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class ProcessingError(Exception):
     """Raised when a PDF upload can't be processed."""
+
+
+@dataclass(frozen=True)
+class UploadedPdf:
+    """PDF upload content after Flask has read the incoming file stream."""
+
+    filename: str
+    content: bytes
 
 
 def check_for_duplicates(invoices: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -88,25 +104,119 @@ def process_uploaded_pdf(filename: str, content: BytesIO) -> Dict[str, Any]:
     `duplicates`, `zero_price_items`, `lmn_mapping_count`, `total_amount`,
     and `summary`.
     """
-    if not filename.lower().endswith(".pdf"):
-        raise ProcessingError("Upload must be a .pdf file.")
+    content.seek(0)
+    return process_uploaded_pdfs([UploadedPdf(filename=filename, content=content.read())])
+
+
+def process_uploaded_pdfs(files: list[UploadedPdf]) -> Dict[str, Any]:
+    """Parse one or more LMN Job History PDFs as a single billing batch."""
+    if not files:
+        raise ProcessingError("Please upload at least one PDF.")
 
     t0 = time.monotonic()
-    content.seek(0, 2)
-    size_bytes = content.tell()
-    content.seek(0)
-    logger.info("Processing upload: filename=%s size=%d bytes", filename, size_bytes)
+    seen_hashes: dict[str, str] = {}
+    parsed_reports: list[tuple[str, ParsedReport]] = []
+    total_size = 0
 
-    try:
-        report = parse_pdf(content)
-    except PdfParseError as e:
-        logger.warning("PDF parse failed for %s: %s", filename, e)
-        raise ProcessingError(str(e))
-    except Exception as e:
-        logger.exception("Unexpected error reading PDF %s", filename)
-        raise ProcessingError(f"Could not read PDF: {e}")
+    for file in files:
+        if not file.filename.lower().endswith(".pdf"):
+            raise ProcessingError(f"{file.filename} must be a .pdf file.")
+        digest = sha256(file.content).hexdigest()
+        if digest in seen_hashes:
+            raise ProcessingError(
+                "Duplicate PDF uploaded: "
+                f"{seen_hashes[digest]} and {file.filename} appear to be the same file."
+            )
+        seen_hashes[digest] = file.filename
+        total_size += len(file.content)
+
+    for file in files:
+        logger.info(
+            "Processing upload file: filename=%s size=%d bytes",
+            file.filename,
+            len(file.content),
+        )
+        try:
+            report = parse_pdf(BytesIO(file.content))
+        except PdfParseError as e:
+            logger.warning("PDF parse failed for %s: %s", file.filename, e)
+            raise ProcessingError(f"{file.filename}: {e}")
+        except Exception as e:
+            logger.exception("Unexpected error reading PDF %s", file.filename)
+            raise ProcessingError(f"{file.filename}: Could not read PDF: {e}")
+
+        logger.info(
+            "Parsed PDF %s: customers=%d tasks=%d",
+            file.filename,
+            len(report.customers),
+            len(report.tasks),
+        )
+        parsed_reports.append((file.filename, report))
+
+    _reject_overlapping_tasks(parsed_reports)
+
+    combined = ParsedReport(customers={}, tasks=[])
+    for _, report in parsed_reports:
+        combined.customers.update(report.customers)
+        combined.tasks.extend(report.tasks)
+
+    upload_label = (
+        files[0].filename if len(files) == 1 else f"{len(files)} PDFs"
+    )
     logger.info(
-        "Parsed PDF: customers=%d total_tasks=%d (%dms)",
+        "Processing upload batch: label=%s files=%d size=%d bytes tasks=%d",
+        upload_label,
+        len(files),
+        total_size,
+        len(combined.tasks),
+    )
+    return _process_parsed_report(combined, upload_label, t0)
+
+
+def _task_fingerprint(task: Task) -> tuple[str, str, str, str, str, str, str, float]:
+    """Stable key for detecting the same LMN task across multiple PDFs."""
+    return (
+        task.jobsite_id,
+        task.date,
+        task.foreman,
+        task.task_name,
+        task.cost_code_num,
+        task.start_time,
+        task.end_time,
+        round(task.task_man_hrs, 2),
+    )
+
+
+def _reject_overlapping_tasks(parsed_reports: list[tuple[str, ParsedReport]]) -> None:
+    """Reject a batch when two different PDFs contain the same parsed task."""
+    seen: dict[tuple[str, str, str, str, str, str, str, float], str] = {}
+    for filename, report in parsed_reports:
+        local_seen: set[tuple[str, str, str, str, str, str, str, float]] = set()
+        for task in report.tasks:
+            key = _task_fingerprint(task)
+            if key in local_seen:
+                continue
+            local_seen.add(key)
+            other_filename = seen.get(key)
+            if other_filename and other_filename != filename:
+                jobsite_id, date, foreman, task_name, *_ = key
+                raise ProcessingError(
+                    "Overlapping task found in uploaded PDFs: "
+                    f"{other_filename} and {filename} both include "
+                    f"{jobsite_id} / {date} / {foreman} / {task_name}."
+                )
+            seen[key] = filename
+
+
+def _process_parsed_report(
+    report: ParsedReport, upload_label: str, t0: float | None = None
+) -> Dict[str, Any]:
+    """Build invoices and UI state from a parsed single- or multi-PDF report."""
+    if t0 is None:
+        t0 = time.monotonic()
+    logger.info(
+        "Parsed upload: label=%s customers=%d total_tasks=%d (%dms)",
+        upload_label,
         len(report.customers),
         len(report.tasks),
         int((time.monotonic() - t0) * 1000),

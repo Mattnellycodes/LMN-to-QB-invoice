@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import io
 import logging
 import os
 import secrets
@@ -370,28 +369,36 @@ def upload():
 @app.route("/upload", methods=["POST"])
 @require_qbo_auth
 def upload_post():
-    """Process the uploaded LMN Job History PDF."""
-    from src.web_processing import process_uploaded_pdf, ProcessingError
+    """Process uploaded LMN Job History PDF(s)."""
+    from src.web_processing import ProcessingError, UploadedPdf, process_uploaded_pdfs
 
-    pdf_file = request.files.get("pdf_file")
+    pdf_files = [
+        file for file in request.files.getlist("pdf_file")
+        if file and file.filename
+    ]
 
-    if not pdf_file or not pdf_file.filename:
-        flash("Please upload the LMN Job History PDF.", "error")
+    if not pdf_files:
+        flash("Please upload at least one LMN Job History PDF.", "error")
         return redirect(url_for("upload"))
 
-    if not is_allowed_file(pdf_file.filename):
-        flash("Upload must be a .pdf file.", "error")
-        return redirect(url_for("upload"))
+    for pdf_file in pdf_files:
+        if not is_allowed_file(pdf_file.filename):
+            flash(f"{pdf_file.filename} must be a .pdf file.", "error")
+            return redirect(url_for("upload"))
 
     try:
-        content = io.BytesIO(pdf_file.read())
-        result = process_uploaded_pdf(pdf_file.filename, content)
+        uploads = [
+            UploadedPdf(filename=pdf_file.filename, content=pdf_file.read())
+            for pdf_file in pdf_files
+        ]
+        result = process_uploaded_pdfs(uploads)
 
         _clear_processing_result()
         _set_processing_result(result)
 
         logger.info(
-            "POST /upload committed: invoices=%d unmapped=%d zero_price=%d",
+            "POST /upload committed: files=%d invoices=%d unmapped=%d zero_price=%d",
+            len(uploads),
             len(result.get("invoices", [])),
             len(result.get("unmapped_jobsites", [])),
             len(result.get("zero_price_items", [])),
