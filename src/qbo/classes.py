@@ -1,8 +1,9 @@
 """QuickBooks Online Class operations.
 
-Looks up the default invoice-line Class (a QBO "Class" entity, used for
-per-line departmental tagging). Class tracking per transaction line must
-already be enabled on the connected company.
+Looks up the invoice-line Classes used for per-line departmental tagging.
+Class tracking per transaction line must already be enabled on the connected
+company and both the Maintenance and Irrigation classes must exist before
+invoicing.
 """
 
 from __future__ import annotations
@@ -12,14 +13,19 @@ from typing import Dict, Optional
 
 import requests
 
+from src.invoice.line_items import IRRIGATION_CLASS_NAME, MAINTENANCE_CLASS_NAME
 from src.qbo.customers import get_api_base_url
 
 logger = logging.getLogger(__name__)
 
 
-DEFAULT_CLASS_NAME = "Maintenance"
-"""QBO Class applied to every invoice line by default. Must exist in the
-target QBO company before running invoicing."""
+__all__ = [
+    "IRRIGATION_CLASS_NAME",
+    "MAINTENANCE_CLASS_NAME",
+    "ClassMappingError",
+    "get_class_by_name",
+    "get_required_class_refs",
+]
 
 
 class ClassMappingError(RuntimeError):
@@ -59,3 +65,25 @@ def get_class_by_name(
             return {"value": class_id, "name": class_name}
     logger.warning("QBO Class %r not found on company %s", name, realm_id)
     return None
+
+
+def get_required_class_refs(
+    access_token: str,
+    realm_id: str,
+) -> Dict[str, Dict[str, str]]:
+    """Fetch the Maintenance and Irrigation ClassRefs; fail loud if missing.
+
+    Every invoice line needs a ClassRef; the Irrigation class is required
+    even for uploads that have no Irr jobsites, because `create_draft_invoice`
+    now always passes both.
+    """
+    refs: Dict[str, Dict[str, str]] = {}
+    for name in (MAINTENANCE_CLASS_NAME, IRRIGATION_CLASS_NAME):
+        ref = get_class_by_name(access_token, realm_id, name)
+        if ref is None:
+            raise ClassMappingError(
+                f"QBO Class {name!r} not found. Create it in QuickBooks "
+                "(Settings → All Lists → Classes) and retry."
+            )
+        refs[name] = ref
+    return refs

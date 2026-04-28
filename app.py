@@ -59,20 +59,28 @@ def _clear_processing_result():
 
 
 def _active_zero_price_items(result):
-    """Zero-price items that belong to mapped jobsites — the list actually rendered in the modal.
+    """Zero-price items that belong to mapped invoices — the list actually rendered in the modal.
 
     Shared by GET /results (renders the modal) and POST /update-zero-price-items
     (validates submitted prices) so both agree on which item indexes to expect.
+
+    Merged (maint + Irr) invoices contribute $0 rows from both source jobsites,
+    so match on any source jobsite_id — not just the primary.
     """
-    mapped_ids = {
-        inv["jobsite_id"]
-        for inv in result.get("invoices", [])
-        if inv.get("qbo_customer_id")
-    }
+    mapped_source_ids: set[str] = set()
+    for inv in result.get("invoices", []):
+        if not inv.get("qbo_customer_id"):
+            continue
+        sources = inv.get("sources") or []
+        if sources:
+            for src in sources:
+                mapped_source_ids.add(str(src.get("jobsite_id", "")))
+        else:
+            mapped_source_ids.add(str(inv.get("jobsite_id", "")))
     return [
         item
         for item in result.get("zero_price_items", [])
-        if item["jobsite_id"] in mapped_ids
+        if str(item.get("jobsite_id", "")) in mapped_source_ids
     ]
 
 
@@ -704,9 +712,24 @@ def update_zero_price_items():
     )
 
     # Parse and validate submitted prices
-    from src.invoice.line_items import strip_unit_marker
+    from src.invoice.line_items import (
+        FEE_DESCRIPTION,
+        FEE_ITEM_LOOKUP_NAME,
+        MAINTENANCE_CLASS_NAME,
+        strip_unit_marker,
+    )
 
-    new_line_items_by_jobsite = {}
+    # Map every source jobsite_id -> the primary jobsite_id of its containing
+    # invoice, so Irr-side submitted items route onto the merged invoice.
+    source_to_primary: dict[str, str] = {}
+    for inv in result["invoices"]:
+        primary = str(inv["jobsite_id"])
+        for src in inv.get("sources") or []:
+            source_to_primary[str(src["jobsite_id"])] = primary
+        # Safety net: invoices without a sources list route by their own id.
+        source_to_primary.setdefault(primary, primary)
+
+    new_line_items_by_primary: dict[str, list[dict]] = {}
     for item in zero_price_items:
         idx = item["index"]
         rate_str = request.form.get(f"rate_{idx}", "").strip()
@@ -728,50 +751,52 @@ def update_zero_price_items():
         description = desc or item["description"]
         amount = round(rate * quantity, 2)
 
-        jobsite_id = item["jobsite_id"]
-        if jobsite_id not in new_line_items_by_jobsite:
-            new_line_items_by_jobsite[jobsite_id] = []
-        new_line_items_by_jobsite[jobsite_id].append(
+        source_id = str(item["jobsite_id"])
+        primary_id = source_to_primary.get(source_id, source_id)
+        class_name = item.get("class_name") or MAINTENANCE_CLASS_NAME
+        new_line_items_by_primary.setdefault(primary_id, []).append(
             {
                 "description": description,
                 "quantity": quantity,
                 "rate": rate,
                 "amount": amount,
                 "item_lookup_name": strip_unit_marker(description),
+                "class_name": class_name,
                 "qbo_item_name": None,
                 "uses_fallback": False,
             }
         )
 
     # Update invoices in session
-    fee_description = "Direct Payment Fee (Subtract if paying by USPS check)"
     for inv in result["invoices"]:
-        jobsite_id = inv["jobsite_id"]
-        if jobsite_id not in new_line_items_by_jobsite:
+        primary_id = str(inv["jobsite_id"])
+        if primary_id not in new_line_items_by_primary:
             continue
 
         # Strip existing fee line item
         inv["line_items"] = [
-            li for li in inv["line_items"] if li["description"] != fee_description
+            li for li in inv["line_items"] if li["description"] != FEE_DESCRIPTION
         ]
 
         # Add user-priced items
-        inv["line_items"].extend(new_line_items_by_jobsite[jobsite_id])
+        inv["line_items"].extend(new_line_items_by_primary[primary_id])
 
         # Recalculate totals
         inv["subtotal"] = round(sum(li["amount"] for li in inv["line_items"]), 2)
         inv["direct_payment_fee"] = calculate_direct_payment_fee(inv["subtotal"])
-        inv["line_items"].append(
-            {
-                "description": fee_description,
-                "quantity": 1,
-                "rate": inv["direct_payment_fee"],
-                "amount": inv["direct_payment_fee"],
-                "item_lookup_name": "Direct Payment Fee",
-                "qbo_item_name": None,
-                "uses_fallback": False,
-            }
-        )
+        if inv["direct_payment_fee"] > 0:
+            inv["line_items"].append(
+                {
+                    "description": FEE_DESCRIPTION,
+                    "quantity": 1,
+                    "rate": inv["direct_payment_fee"],
+                    "amount": inv["direct_payment_fee"],
+                    "item_lookup_name": FEE_ITEM_LOOKUP_NAME,
+                    "class_name": MAINTENANCE_CLASS_NAME,
+                    "qbo_item_name": None,
+                    "uses_fallback": False,
+                }
+            )
         inv["total"] = round(inv["subtotal"] + inv["direct_payment_fee"], 2)
 
     # Clear zero-price items so modal doesn't reappear
@@ -792,9 +817,9 @@ def update_zero_price_items():
 
     _set_processing_result(result)
     logger.info(
-        "POST /update-zero-price-items committed: %d item(s) priced across %d jobsite(s)",
-        sum(len(v) for v in new_line_items_by_jobsite.values()),
-        len(new_line_items_by_jobsite),
+        "POST /update-zero-price-items committed: %d item(s) priced across %d invoice(s)",
+        sum(len(v) for v in new_line_items_by_primary.values()),
+        len(new_line_items_by_primary),
     )
 
     return redirect(url_for("results"))
