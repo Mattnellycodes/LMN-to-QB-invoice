@@ -4,6 +4,11 @@ Input shape: `JobsiteRollup` from src.calculations.allocation — one per jobsit
 already aggregated across multiple days and augmented with allocated drive time.
 Services on the rollup carry `source_context` (date, foreman, notes) for the
 zero-price modal.
+
+Irrigation support: when a jobsite name ends in ` - Irr.`, its lines merge
+onto the matching maintenance jobsite's invoice (see src/invoice/irrigation.py)
+and are tagged with the QBO "Irrigation" class. The Direct Payment Fee always
+lands last and is always tagged "Maintenance".
 """
 
 from __future__ import annotations
@@ -23,6 +28,14 @@ logger = logging.getLogger(__name__)
 
 
 INCLUDED_ITEMS_PATH = Path(__file__).resolve().parents[2] / "config" / "included_items.txt"
+
+# QBO Class names. Declared here (not in src/qbo/) so invoice-domain code can
+# reference them without pulling in the QBO integration layer.
+MAINTENANCE_CLASS_NAME = "Maintenance"
+IRRIGATION_CLASS_NAME = "Irrigation"
+
+FEE_DESCRIPTION = "Direct Payment Fee (Subtract if paying by USPS check)"
+FEE_ITEM_LOOKUP_NAME = "Direct Payment Fee"
 
 # LMN service names include a trailing unit-of-measure tag (e.g.
 # "Deer Spray, Bozeman, ea [ea]", "Mulch, Soil Pep, bulk [Yd]"). QBO items
@@ -50,11 +63,37 @@ class LineItem:
     # For services/materials this equals `description`; for labor it's the
     # LMN rate name (distinct from the synthesized customer-facing description).
     item_lookup_name: str = ""
+    # QBO Class applied to this line. Defaults to Maintenance; lines sourced
+    # from an " - Irr." jobsite are tagged IRRIGATION_CLASS_NAME.
+    class_name: str = MAINTENANCE_CLASS_NAME
+
+
+@dataclass
+class InvoiceSource:
+    """One rollup's contribution to an invoice.
+
+    Non-merged invoices have a single source; merged (maint + Irr) invoices
+    have two. Each source carries its own history data so duplicate detection
+    can flag either side in future uploads.
+    """
+
+    jobsite_id: str
+    jobsite_name: str
+    class_name: str
+    work_dates: list[str] = field(default_factory=list)
+    foremen: list[str] = field(default_factory=list)
+    date_foreman_pairs: list[str] = field(default_factory=list)
+    task_notes: list[dict] = field(default_factory=list)
 
 
 @dataclass
 class InvoiceData:
-    """Complete invoice data for a single jobsite."""
+    """Complete invoice data for a single QBO invoice.
+
+    `jobsite_id` is the **primary** ID — maintenance's if paired, else irr's
+    (for standalone Irr invoices), else the only source's. It is the lookup
+    key used for QBO customer mapping.
+    """
 
     jobsite_id: str
     jobsite_name: str
@@ -64,10 +103,31 @@ class InvoiceData:
     subtotal: float = 0.0
     direct_payment_fee: float = 0.0
     total: float = 0.0
-    work_dates: list[str] = field(default_factory=list)
-    foremen: list[str] = field(default_factory=list)
-    # "<date>|<foreman>" strings — the canonical duplicate-detection key.
-    date_foreman_pairs: list[str] = field(default_factory=list)
+    sources: list[InvoiceSource] = field(default_factory=list)
+
+    @property
+    def has_irrigation(self) -> bool:
+        return any(s.class_name == IRRIGATION_CLASS_NAME for s in self.sources)
+
+    @property
+    def work_dates(self) -> list[str]:
+        return sorted({d for s in self.sources for d in s.work_dates})
+
+    @property
+    def foremen(self) -> list[str]:
+        return sorted({f for s in self.sources for f in s.foremen})
+
+    @property
+    def date_foreman_pairs(self) -> list[str]:
+        return sorted({p for s in self.sources for p in s.date_foreman_pairs})
+
+    @property
+    def task_notes(self) -> list[dict]:
+        """Flattened task_notes across all sources (maintenance first)."""
+        notes: list[dict] = []
+        for s in self.sources:
+            notes.extend(s.task_notes)
+        return notes
 
 
 def load_included_items(path: Path = INCLUDED_ITEMS_PATH) -> frozenset[str]:
@@ -137,7 +197,9 @@ def _classify_service(description: str, total_price: float, included: frozenset[
 
 
 def extract_service_line_items(
-    services: Iterable[dict], included: frozenset[str]
+    services: Iterable[dict],
+    included: frozenset[str],
+    class_name: str = MAINTENANCE_CLASS_NAME,
 ) -> list[LineItem]:
     """Dedupe billable services by description; sum quantities and totals."""
     aggregated: "OrderedDict[str, LineItem]" = OrderedDict()
@@ -160,6 +222,7 @@ def extract_service_line_items(
                 rate=rate,
                 amount=round(total, 2),
                 item_lookup_name=strip_unit_marker(desc),
+                class_name=class_name,
             )
         else:
             existing.quantity = round(existing.quantity + qty, 4)
@@ -204,25 +267,30 @@ def extract_zero_price_items(
     return out
 
 
-def build_invoice(
-    rollup: JobsiteRollup,
-    included: frozenset[str],
-    invoice_date: Optional[str] = None,
-) -> InvoiceData:
-    """Build a full InvoiceData for one jobsite."""
-    if invoice_date is None:
-        invoice_date = datetime.now().strftime("%Y-%m-%d")
-
+def _make_invoice_source(rollup: JobsiteRollup, class_name: str) -> InvoiceSource:
     pairs = sorted({f"{d}|{f}" for (d, f) in rollup.work_by_date_foreman})
-    invoice = InvoiceData(
+    return InvoiceSource(
         jobsite_id=rollup.jobsite_id,
         jobsite_name=rollup.customer_name,
-        customer_name=rollup.customer_name,
-        invoice_date=invoice_date,
+        class_name=class_name,
         work_dates=list(rollup.work_dates),
         foremen=list(rollup.foremen),
         date_foreman_pairs=pairs,
+        task_notes=[dict(n) for n in rollup.task_notes],
     )
+
+
+def _build_rollup_lines(
+    rollup: JobsiteRollup,
+    included: frozenset[str],
+    class_name: str,
+) -> list[LineItem]:
+    """Labor + materials for one rollup, tagged with the given QBO class.
+
+    No subtotal, no DP fee — pure line-item construction. The caller stitches
+    together one or two of these results and then calls `_finalize_invoice`.
+    """
+    lines: list[LineItem] = []
 
     total_hours = rollup.total_billable_hours
     rate = rollup.hourly_rate
@@ -231,34 +299,115 @@ def build_invoice(
         # validation passes. Computing Amount from the raw hours while sending
         # a rounded Qty causes rejection when fractional hours are involved.
         qty = round(total_hours, 2)
-        invoice.line_items.append(
+        lines.append(
             LineItem(
                 description=format_labor_description(rollup.work_dates),
                 quantity=qty,
                 rate=rate,
                 amount=round(qty * rate, 2),
                 item_lookup_name=rollup.hourly_rate_name,
+                class_name=class_name,
             )
         )
 
-    invoice.line_items.extend(extract_service_line_items(rollup.services, included))
+    lines.extend(extract_service_line_items(rollup.services, included, class_name))
+    return lines
 
+
+def _finalize_invoice(invoice: InvoiceData) -> None:
+    """Compute subtotal, DP fee, total; append DP-fee line (Maintenance class).
+
+    Runs exactly once per invoice at the very end of the build flow. The fee
+    line is always tagged Maintenance regardless of the invoice's mix.
+    """
     invoice.subtotal = round(sum(i.amount for i in invoice.line_items), 2)
-    invoice.direct_payment_fee = calculate_direct_payment_fee(invoice.subtotal)
-    invoice.total = round(invoice.subtotal + invoice.direct_payment_fee, 2)
+    fee = calculate_direct_payment_fee(invoice.subtotal)
+    invoice.direct_payment_fee = fee
+    invoice.total = round(invoice.subtotal + fee, 2)
 
-    if invoice.direct_payment_fee > 0:
+    if fee > 0:
         invoice.line_items.append(
             LineItem(
-                description="Direct Payment Fee (Subtract if paying by USPS check)",
+                description=FEE_DESCRIPTION,
                 quantity=1,
-                rate=invoice.direct_payment_fee,
-                amount=invoice.direct_payment_fee,
-                item_lookup_name="Direct Payment Fee",
+                rate=fee,
+                amount=fee,
+                item_lookup_name=FEE_ITEM_LOOKUP_NAME,
+                class_name=MAINTENANCE_CLASS_NAME,
             )
         )
 
+
+def build_invoice_for_group(
+    group,
+    included: frozenset[str],
+    invoice_date: Optional[str] = None,
+) -> InvoiceData:
+    """Build an InvoiceData for one RollupGroup (maintenance, irrigation, or both).
+
+    Line order: maintenance labor+materials, then irrigation labor+materials,
+    then the Direct Payment Fee (always Maintenance). Primary jobsite_id is
+    the maintenance jobsite's if present, else the irrigation jobsite's — this
+    is the ID used for QBO customer-mapping lookup downstream.
+    """
+    if invoice_date is None:
+        invoice_date = datetime.now().strftime("%Y-%m-%d")
+
+    maint = group.maintenance
+    irr = group.irrigation
+    if maint is None and irr is None:
+        raise ValueError("RollupGroup must contain at least one rollup")
+
+    # Strip the " - Irr." suffix for standalone Irr so the customer name is clean.
+    # For paired invoices the maintenance name is already suffix-free.
+    from src.invoice.irrigation import strip_irr_suffix
+
+    if maint is not None:
+        primary_id = maint.jobsite_id
+        display_name = maint.customer_name
+    else:
+        primary_id = irr.jobsite_id
+        display_name = strip_irr_suffix(irr.customer_name)
+
+    invoice = InvoiceData(
+        jobsite_id=primary_id,
+        jobsite_name=display_name,
+        customer_name=display_name,
+        invoice_date=invoice_date,
+    )
+
+    if maint is not None:
+        invoice.line_items.extend(
+            _build_rollup_lines(maint, included, MAINTENANCE_CLASS_NAME)
+        )
+        invoice.sources.append(_make_invoice_source(maint, MAINTENANCE_CLASS_NAME))
+    if irr is not None:
+        invoice.line_items.extend(
+            _build_rollup_lines(irr, included, IRRIGATION_CLASS_NAME)
+        )
+        invoice.sources.append(_make_invoice_source(irr, IRRIGATION_CLASS_NAME))
+
+    _finalize_invoice(invoice)
     return invoice
+
+
+def build_invoice(
+    rollup: JobsiteRollup,
+    included: frozenset[str],
+    invoice_date: Optional[str] = None,
+) -> InvoiceData:
+    """Build an InvoiceData from a single rollup (backward-compat convenience).
+
+    Treats the rollup as a standalone maintenance job. For irrigation-aware
+    builds, use `build_invoice_for_group` with a `RollupGroup`.
+    """
+    from src.invoice.irrigation import RollupGroup, has_irr_suffix
+
+    if has_irr_suffix(rollup.customer_name):
+        group = RollupGroup(maintenance=None, irrigation=rollup)
+    else:
+        group = RollupGroup(maintenance=rollup, irrigation=None)
+    return build_invoice_for_group(group, included, invoice_date)
 
 
 def build_all_invoices(
@@ -266,25 +415,46 @@ def build_all_invoices(
     included: Optional[frozenset[str]] = None,
     invoice_date: Optional[str] = None,
 ) -> list[InvoiceData]:
-    """Build invoices for every jobsite rollup with a non-empty subtotal."""
+    """Build invoices for every rollup, merging Irr jobs onto their maintenance twin.
+
+    Pairs `- Irr.` jobsites with their maintenance counterparts (same stripped
+    name in the same upload), emits one InvoiceData per resulting group, and
+    drops groups with zero subtotal.
+    """
+    from src.invoice.irrigation import pair_rollups
+
     if included is None:
         included = load_included_items()
     logger.debug("Included-items allow-list size: %d", len(included))
+
+    rollups_list = list(rollups)
+    groups = pair_rollups(rollups_list)
+
     invoices: list[InvoiceData] = []
     skipped = 0
     fees_applied = 0
-    for rollup in rollups:
-        invoice = build_invoice(rollup, included, invoice_date)
-        if invoice.subtotal > 0:
-            invoices.append(invoice)
-            if invoice.direct_payment_fee > 0:
-                fees_applied += 1
-        else:
+    merged_count = 0
+    standalone_irr_count = 0
+    for group in groups:
+        invoice = build_invoice_for_group(group, included, invoice_date)
+        if invoice.subtotal <= 0:
             skipped += 1
+            continue
+        invoices.append(invoice)
+        if invoice.direct_payment_fee > 0:
+            fees_applied += 1
+        if group.maintenance is not None and group.irrigation is not None:
+            merged_count += 1
+        elif group.irrigation is not None:
+            standalone_irr_count += 1
+
     logger.info(
-        "Built %d invoices (skipped=%d zero-subtotal, direct-pay fee applied=%d)",
+        "Built %d invoices (skipped=%d zero-subtotal, direct-pay fee applied=%d, "
+        "merged maint+irr=%d, standalone irr=%d)",
         len(invoices),
         skipped,
         fees_applied,
+        merged_count,
+        standalone_irr_count,
     )
     return invoices

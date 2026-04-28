@@ -130,29 +130,3 @@ def get_valid_token() -> Optional[str]:
         return env_token
 
     return None
-
-
-def test_token(token: str) -> bool:
-    """
-    Test if an LMN token is valid by making a test API call.
-
-    Args:
-        token: The access token to test
-
-    Returns:
-        True if the token is valid, False otherwise
-    """
-    from src.lmn.api import LMN_API_URL
-
-    try:
-        response = requests.get(
-            LMN_API_URL,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-            },
-            timeout=10,
-        )
-        return response.status_code == 200
-    except requests.RequestException:
-        return False

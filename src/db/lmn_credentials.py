@@ -1,66 +1,14 @@
-"""LMN credentials and token storage in database."""
+"""LMN token cache in database. Schema lives in src/db/connection.py:init_db."""
 
 from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
-from typing import Optional, Tuple
+from typing import Optional
 
 from src.db.connection import db_cursor
 
 logger = logging.getLogger(__name__)
-
-
-def init_lmn_credentials_table() -> None:
-    """Create the lmn_credentials table if it doesn't exist."""
-    with db_cursor() as cursor:
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS lmn_credentials (
-                id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
-                username TEXT NOT NULL,
-                password TEXT NOT NULL,
-                cached_token TEXT,
-                token_expires_at TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
-
-def save_lmn_credentials(username: str, password: str) -> None:
-    """
-    Save LMN credentials to database.
-
-    Uses upsert to ensure only one row exists (id=1).
-    """
-    with db_cursor() as cursor:
-        cursor.execute("""
-            INSERT INTO lmn_credentials (id, username, password, updated_at)
-            VALUES (1, %s, %s, CURRENT_TIMESTAMP)
-            ON CONFLICT (id) DO UPDATE SET
-                username = EXCLUDED.username,
-                password = EXCLUDED.password,
-                cached_token = NULL,
-                token_expires_at = NULL,
-                updated_at = CURRENT_TIMESTAMP
-        """, (username, password))
-    logger.info("Saved LMN credentials for user=%s", username)
-
-
-def get_lmn_credentials() -> Optional[Tuple[str, str]]:
-    """
-    Get stored LMN credentials.
-
-    Returns:
-        Tuple of (username, password) or None if not configured.
-    """
-    with db_cursor() as cursor:
-        cursor.execute("""
-            SELECT username, password FROM lmn_credentials WHERE id = 1
-        """)
-        row = cursor.fetchone()
-        if row:
-            return (row[0], row[1])
-        return None
 
 
 def save_lmn_token(token: str, expires_at: datetime) -> None:
@@ -100,17 +48,3 @@ def get_cached_token() -> Optional[str]:
         if datetime.now() < (expires_at - timedelta(minutes=5)):
             return token
         return None
-
-
-def delete_lmn_credentials() -> None:
-    """Delete stored LMN credentials and cached token."""
-    with db_cursor() as cursor:
-        cursor.execute("DELETE FROM lmn_credentials WHERE id = 1")
-    logger.info("Deleted stored LMN credentials")
-
-
-def has_lmn_credentials() -> bool:
-    """Check if LMN credentials are stored."""
-    with db_cursor() as cursor:
-        cursor.execute("SELECT 1 FROM lmn_credentials WHERE id = 1")
-        return cursor.fetchone() is not None

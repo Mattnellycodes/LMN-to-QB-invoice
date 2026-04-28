@@ -179,7 +179,10 @@
         {% for invoice in result.invoices %}
         <tr>
             <td>{{ invoice.qbo_display_name or invoice.customer_name }}</td>
-            <td>{{ invoice.jobsite_name }}</td>
+            <td>
+                {{ invoice.jobsite_name }}
+                {% if invoice.has_irrigation %}<span class="badge-irrigation" title="Irrigation lines bundled on this invoice">+ Irrigation</span>{% endif %}
+            </td>
             <td>{{ invoice.line_items|length }}</td>
             <td class="text-right">${{ "%.2f"|format(invoice.subtotal) }}</td>
             <td class="text-right">${{ "%.2f"|format(invoice.direct_payment_fee) }}</td>
@@ -193,7 +196,23 @@
     <summary>View Line Item Details</summary>
     {% for invoice in result.invoices %}
     <div class="invoice-detail-card">
-        <h4>{{ invoice.qbo_display_name or invoice.customer_name }} - {{ invoice.jobsite_name }}</h4>
+        <h4>
+            {{ invoice.qbo_display_name or invoice.customer_name }} - {{ invoice.jobsite_name }}
+            {% if invoice.has_irrigation %}<span class="badge-irrigation" title="Irrigation lines bundled on this invoice">+ Irrigation bundled</span>{% endif %}
+        </h4>
+        {% if invoice.task_notes %}
+        <div class="invoice-crew-notes">
+            <strong>Crew notes</strong>
+            <ul>
+                {% for n in invoice.task_notes %}
+                <li>
+                    <span class="invoice-crew-notes-meta">{{ n.date }} &middot; {{ n.foreman }}</span>
+                    <span class="invoice-crew-notes-text">{{ n.notes }}</span>
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
         <table>
             <thead>
                 <tr>
@@ -220,7 +239,7 @@
                             <em class="text-muted">&mdash;</em>
                         {% endif %}
                     </td>
-                    <td>Maintenance</td>
+                    <td>{{ item.class_name or 'Maintenance' }}</td>
                     <td class="text-right">{{ "%.2f"|format(item.quantity) }}</td>
                     <td class="text-right">${{ "%.2f"|format(item.rate) }}</td>
                     <td class="text-right">${{ "%.2f"|format(item.amount) }}</td>

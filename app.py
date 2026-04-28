@@ -23,12 +23,77 @@ from flask import (
     url_for,
 )
 
+from src import results_store
 from src.logging_config import configure_logging
 
 load_dotenv()
 configure_logging()
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Server-side result storage
+# Full processing/invoice result dicts exceed the ~4 KB Flask cookie cap and
+# were silently dropped. The session now carries only a UUID pointing to a
+# filesystem-backed JSON blob. See src/results_store.py.
+# =============================================================================
+
+
+def _get_processing_result(default=None):
+    """Load the current processing result from the server-side store."""
+    return results_store.load(session.get("results_key")) or default
+
+
+def _set_processing_result(result):
+    """Persist the processing result, creating or updating its store entry."""
+    key = session.get("results_key")
+    if key:
+        results_store.update(key, result)
+    else:
+        session["results_key"] = results_store.save(result)
+
+
+def _clear_processing_result():
+    results_store.delete(session.pop("results_key", None))
+
+
+def _active_zero_price_items(result):
+    """Zero-price items that belong to mapped invoices — the list actually rendered in the modal.
+
+    Shared by GET /results (renders the modal) and POST /update-zero-price-items
+    (validates submitted prices) so both agree on which item indexes to expect.
+
+    Merged (maint + Irr) invoices contribute $0 rows from both source jobsites,
+    so match on any source jobsite_id — not just the primary.
+    """
+    mapped_source_ids: set[str] = set()
+    for inv in result.get("invoices", []):
+        if not inv.get("qbo_customer_id"):
+            continue
+        sources = inv.get("sources") or []
+        if sources:
+            for src in sources:
+                mapped_source_ids.add(str(src.get("jobsite_id", "")))
+        else:
+            mapped_source_ids.add(str(inv.get("jobsite_id", "")))
+    return [
+        item
+        for item in result.get("zero_price_items", [])
+        if str(item.get("jobsite_id", "")) in mapped_source_ids
+    ]
+
+
+def _get_invoice_result():
+    return results_store.load(session.get("invoice_results_key"))
+
+
+def _set_invoice_result(result):
+    key = session.get("invoice_results_key")
+    if key:
+        results_store.update(key, result)
+    else:
+        session["invoice_results_key"] = results_store.save(result)
 
 app = Flask(__name__)
 
@@ -46,8 +111,8 @@ app.secret_key = _secret_key
 try:
     from src.db.connection import init_db
     init_db()
-except Exception as e:
-    logger.warning(f"Database initialization skipped: {e}")
+except Exception:
+    logger.exception("Database initialization failed — app will run without DB features")
 
 
 # =============================================================================
@@ -162,9 +227,6 @@ def health():
 def index():
     """Landing page with QuickBooks connection status."""
     from src.qbo.context import has_qbo_credentials
-
-    # Clear any lingering invoice_type from older sessions
-    session.pop("invoice_type", None)
 
     is_connected = has_qbo_credentials()
     realm_id = session.get("qbo_tokens", {}).get("realm_id") if is_connected else None
@@ -325,7 +387,15 @@ def upload_post():
         content = io.BytesIO(pdf_file.read())
         result = process_uploaded_pdf(pdf_file.filename, content)
 
-        session["processing_result"] = result
+        _clear_processing_result()
+        _set_processing_result(result)
+
+        logger.info(
+            "POST /upload committed: invoices=%d unmapped=%d zero_price=%d",
+            len(result.get("invoices", [])),
+            len(result.get("unmapped_jobsites", [])),
+            len(result.get("zero_price_items", [])),
+        )
 
         if result.get("unmapped_jobsites"):
             return redirect(url_for("mapping"))
@@ -349,8 +419,12 @@ def upload_post():
 @require_qbo_auth
 def mapping():
     """Show unmapped jobsites and allow mapping to QBO customers."""
-    result = session.get("processing_result")
+    result = _get_processing_result()
     if not result:
+        logger.warning(
+            "GET /mapping hit with no stored result (key=%s)",
+            session.get("results_key"),
+        )
         flash("No data to map. Please upload files first.", "warning")
         return redirect(url_for("upload"))
 
@@ -412,23 +486,20 @@ def mapping_save():
         )
         save_customer_override(mapping)
 
-        # Update session data
-        result = session.get("processing_result", {})
+        result = _get_processing_result(default={})
 
-        # Remove from unmapped list
         unmapped = result.get("unmapped_jobsites", [])
         result["unmapped_jobsites"] = [
             j for j in unmapped if j["jobsite_id"] != jobsite_id
         ]
 
-        # Add qbo_customer_id and qbo_display_name to the invoice for this jobsite
         for inv in result.get("invoices", []):
             if inv["jobsite_id"] == jobsite_id:
                 inv["qbo_customer_id"] = qbo_customer_id
                 inv["qbo_display_name"] = qbo_display_name
                 break
 
-        session["processing_result"] = result
+        _set_processing_result(result)
 
         return jsonify({"success": True})
     except Exception as e:
@@ -440,10 +511,10 @@ def mapping_save():
 @require_qbo_auth
 def mapping_skip():
     """Skip remaining unmapped jobsites and proceed to results."""
-    result = session.get("processing_result", {})
+    result = _get_processing_result(default={})
     result["skipped_jobsites"] = result.get("unmapped_jobsites", [])
     result["unmapped_jobsites"] = []
-    session["processing_result"] = result
+    _set_processing_result(result)
     return jsonify({"success": True, "redirect": url_for("results")})
 
 
@@ -461,8 +532,12 @@ def item_mapping():
     valid ItemRef via the fallback; this page lets the user upgrade any to
     a dedicated QBO Product/Service for cleaner reporting.
     """
-    result = session.get("processing_result")
+    result = _get_processing_result()
     if not result:
+        logger.warning(
+            "GET /item-mapping hit with no stored result (key=%s)",
+            session.get("results_key"),
+        )
         flash("No data to map. Please upload files first.", "warning")
         return redirect(url_for("upload"))
 
@@ -518,7 +593,7 @@ def item_mapping_save():
     try:
         save_item_override(lmn_name, qbo_item_id, qbo_item_name)
 
-        result = session.get("processing_result", {})
+        result = _get_processing_result(default={})
 
         item_refs = result.get("item_refs", {})
         item_refs[lmn_name] = {"value": qbo_item_id, "name": qbo_item_name}
@@ -539,7 +614,7 @@ def item_mapping_save():
         summary["fallback_items"] = len(fallback_names)
         result["summary"] = summary
 
-        session["processing_result"] = result
+        _set_processing_result(result)
 
         return jsonify({"success": True, "remaining": len(fallback_names)})
     except Exception as e:
@@ -556,8 +631,20 @@ def item_mapping_save():
 @require_qbo_auth
 def results():
     """Show processing results and invoice preview."""
-    result = session.get("processing_result")
+    key = session.get("results_key")
+    result = results_store.load(key)
     if not result:
+        if key:
+            logger.warning(
+                "GET /results: results_key=%s present but no result loaded "
+                "(file missing, expired, or unreadable — see prior warnings)",
+                key,
+            )
+        else:
+            logger.warning(
+                "GET /results: no results_key in session — user landed here "
+                "without uploading or session cookie was lost"
+            )
         flash("No data to display. Please upload files first.", "warning")
         return redirect(url_for("upload"))
 
@@ -572,13 +659,7 @@ def results():
     # Check LMN status for display
     lmn_mapping_count = result.get("lmn_mapping_count", 0)
 
-    # Filter zero-price items to only mapped invoices
-    mapped_jobsite_ids = {inv["jobsite_id"] for inv in mapped_invoices}
-    zero_price_items = [
-        item
-        for item in result.get("zero_price_items", [])
-        if item["jobsite_id"] in mapped_jobsite_ids
-    ]
+    zero_price_items = _active_zero_price_items(result)
 
     # Build display result with only mapped invoices
     display_result = {
@@ -610,19 +691,45 @@ def update_zero_price_items():
     """Receive user-entered prices for zero-price items and update invoices."""
     from src.invoice.line_items import calculate_direct_payment_fee
 
-    result = session.get("processing_result")
+    result = _get_processing_result()
     if not result:
+        logger.warning(
+            "POST /update-zero-price-items hit with no stored result (key=%s)",
+            session.get("results_key"),
+        )
         flash("No data to display. Please upload files first.", "warning")
         return redirect(url_for("upload"))
 
-    zero_price_items = result.get("zero_price_items", [])
+    zero_price_items = _active_zero_price_items(result)
     if not zero_price_items:
         return redirect(url_for("results"))
 
-    # Parse and validate submitted prices
-    from src.invoice.line_items import strip_unit_marker
+    submitted_keys = sorted(k for k in request.form.keys() if k.startswith(("rate_", "quantity_", "description_")))
+    logger.info(
+        "POST /update-zero-price-items: %d active items, form keys=%s",
+        len(zero_price_items),
+        submitted_keys,
+    )
 
-    new_line_items_by_jobsite = {}
+    # Parse and validate submitted prices
+    from src.invoice.line_items import (
+        FEE_DESCRIPTION,
+        FEE_ITEM_LOOKUP_NAME,
+        MAINTENANCE_CLASS_NAME,
+        strip_unit_marker,
+    )
+
+    # Map every source jobsite_id -> the primary jobsite_id of its containing
+    # invoice, so Irr-side submitted items route onto the merged invoice.
+    source_to_primary: dict[str, str] = {}
+    for inv in result["invoices"]:
+        primary = str(inv["jobsite_id"])
+        for src in inv.get("sources") or []:
+            source_to_primary[str(src["jobsite_id"])] = primary
+        # Safety net: invoices without a sources list route by their own id.
+        source_to_primary.setdefault(primary, primary)
+
+    new_line_items_by_primary: dict[str, list[dict]] = {}
     for item in zero_price_items:
         idx = item["index"]
         rate_str = request.form.get(f"rate_{idx}", "").strip()
@@ -630,6 +737,12 @@ def update_zero_price_items():
         desc = request.form.get(f"description_{idx}", "").strip()
 
         if not rate_str or float(rate_str) <= 0:
+            logger.warning(
+                "Zero-price validation failed: item index=%s jobsite=%s rate_str=%r",
+                idx,
+                item.get("jobsite_id"),
+                rate_str,
+            )
             flash("All items must have a price greater than $0.", "error")
             return redirect(url_for("results"))
 
@@ -638,50 +751,52 @@ def update_zero_price_items():
         description = desc or item["description"]
         amount = round(rate * quantity, 2)
 
-        jobsite_id = item["jobsite_id"]
-        if jobsite_id not in new_line_items_by_jobsite:
-            new_line_items_by_jobsite[jobsite_id] = []
-        new_line_items_by_jobsite[jobsite_id].append(
+        source_id = str(item["jobsite_id"])
+        primary_id = source_to_primary.get(source_id, source_id)
+        class_name = item.get("class_name") or MAINTENANCE_CLASS_NAME
+        new_line_items_by_primary.setdefault(primary_id, []).append(
             {
                 "description": description,
                 "quantity": quantity,
                 "rate": rate,
                 "amount": amount,
                 "item_lookup_name": strip_unit_marker(description),
+                "class_name": class_name,
                 "qbo_item_name": None,
                 "uses_fallback": False,
             }
         )
 
     # Update invoices in session
-    fee_description = "Direct Payment Fee (Subtract if paying by USPS check)"
     for inv in result["invoices"]:
-        jobsite_id = inv["jobsite_id"]
-        if jobsite_id not in new_line_items_by_jobsite:
+        primary_id = str(inv["jobsite_id"])
+        if primary_id not in new_line_items_by_primary:
             continue
 
         # Strip existing fee line item
         inv["line_items"] = [
-            li for li in inv["line_items"] if li["description"] != fee_description
+            li for li in inv["line_items"] if li["description"] != FEE_DESCRIPTION
         ]
 
         # Add user-priced items
-        inv["line_items"].extend(new_line_items_by_jobsite[jobsite_id])
+        inv["line_items"].extend(new_line_items_by_primary[primary_id])
 
         # Recalculate totals
         inv["subtotal"] = round(sum(li["amount"] for li in inv["line_items"]), 2)
         inv["direct_payment_fee"] = calculate_direct_payment_fee(inv["subtotal"])
-        inv["line_items"].append(
-            {
-                "description": fee_description,
-                "quantity": 1,
-                "rate": inv["direct_payment_fee"],
-                "amount": inv["direct_payment_fee"],
-                "item_lookup_name": "Direct Payment Fee",
-                "qbo_item_name": None,
-                "uses_fallback": False,
-            }
-        )
+        if inv["direct_payment_fee"] > 0:
+            inv["line_items"].append(
+                {
+                    "description": FEE_DESCRIPTION,
+                    "quantity": 1,
+                    "rate": inv["direct_payment_fee"],
+                    "amount": inv["direct_payment_fee"],
+                    "item_lookup_name": FEE_ITEM_LOOKUP_NAME,
+                    "class_name": MAINTENANCE_CLASS_NAME,
+                    "qbo_item_name": None,
+                    "uses_fallback": False,
+                }
+            )
         inv["total"] = round(inv["subtotal"] + inv["direct_payment_fee"], 2)
 
     # Clear zero-price items so modal doesn't reappear
@@ -700,7 +815,12 @@ def update_zero_price_items():
     summary["fallback_items"] = len(fallback_names)
     result["summary"] = summary
 
-    session["processing_result"] = result
+    _set_processing_result(result)
+    logger.info(
+        "POST /update-zero-price-items committed: %d item(s) priced across %d invoice(s)",
+        sum(len(v) for v in new_line_items_by_primary.values()),
+        len(new_line_items_by_primary),
+    )
 
     return redirect(url_for("results"))
 
@@ -711,8 +831,12 @@ def create_invoices():
     """Create draft invoices in QuickBooks."""
     from src.web_processing import create_qbo_invoices
 
-    result = session.get("processing_result")
+    result = _get_processing_result()
     if not result or not result.get("invoices"):
+        logger.warning(
+            "POST /create-invoices: missing or empty result (key=%s)",
+            session.get("results_key"),
+        )
         flash("No invoices to create.", "warning")
         return redirect(url_for("results"))
 
@@ -744,11 +868,24 @@ def create_invoices():
 
     item_refs = result.get("item_refs") or {}
 
+    logger.info(
+        "POST /create-invoices: attempting %d invoice(s) (skip_duplicates=%s)",
+        len(mapped_invoices),
+        bool(request.form.get("skip_duplicates")),
+    )
+
     try:
         invoice_results = create_qbo_invoices(mapped_invoices, item_refs)
-        session["invoice_results"] = invoice_results
+        _set_invoice_result(invoice_results)
+        success_count = sum(1 for r in invoice_results if r.get("success"))
+        logger.info(
+            "POST /create-invoices committed: created=%d failed=%d",
+            success_count,
+            len(invoice_results) - success_count,
+        )
         return redirect(url_for("invoice_results"))
     except Exception as e:
+        logger.exception("POST /create-invoices failed")
         flash(f"Error creating invoices: {e}", "error")
         return redirect(url_for("results"))
 
@@ -757,8 +894,12 @@ def create_invoices():
 @require_qbo_auth
 def invoice_results():
     """Show results of invoice creation."""
-    results = session.get("invoice_results")
+    results = _get_invoice_result()
     if not results:
+        logger.warning(
+            "GET /invoice-results: no stored invoice result (key=%s)",
+            session.get("invoice_results_key"),
+        )
         flash("No invoice results to display.", "warning")
         return redirect(url_for("index"))
 

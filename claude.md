@@ -91,12 +91,14 @@ Boolean variables should read as questions: is_billable, has_materials
 File Organization
 src/
     parsing/pdf_parser.py     # LMN Job History PDF -> ParsedReport (customers + tasks)
-    calculations/allocation.py # Shop pool -> per-jobsite drive-time allocation
+    calculations/allocation.py # Shop pool -> per-jobsite drive-time allocation (proportional)
     invoice/line_items.py     # Aggregated invoice building with dedupe + included filter
     qbo/                      # QuickBooks Online API integration
     lmn/                      # LMN API (auth + customer mapping)
     mapping/customer_mapping.py # Customer matching (JobsiteID -> QBO CustomerID)
-    db/                       # Invoice history, customer overrides, LMN credentials
+    mapping/item_mapping.py   # QBO item/service name mapping
+    db/                       # Invoice history, customer overrides, item overrides, LMN credentials
+    logging_config.py         # Central logging setup (LOG_LEVEL env var, request-id filter)
     web_processing.py         # Web-facing entry: process_uploaded_pdf
     main.py                   # Deprecated stub (CLI removed — web app only)
 app.py                        # Flask web application
@@ -108,8 +110,10 @@ templates/
     index.html                # Home/connection status
     upload.html               # Single-PDF drag-and-drop upload
     mapping.html              # Customer mapping UI
+    item_mapping.html         # QBO item/service mapping UI
     results.html              # Invoice preview + zero-price modal (with crew notes)
     invoice_results.html      # Invoice creation results
+    oauth_success.html        # QBO OAuth callback success page
 tests/                        # Flat layout, one file per module under test
 docs/
     IMPLEMENTATION_PLAN.md
@@ -183,9 +187,8 @@ LMN Authentication
 The app authenticates against LMN's accounting API at https://accounting-api.golmn.com/token:
 - Token sources (priority order):
   1. Cached token from database (if not expired)
-  2. Re-authenticate with DB-stored credentials (entered via home page)
-  3. LMN_EMAIL + LMN_PASSWORD from .env
-  4. LMN_API_TOKEN env var (bare token, legacy)
+  2. LMN_EMAIL + LMN_PASSWORD from .env
+  3. LMN_API_TOKEN env var (bare token, legacy)
 - Access tokens are cached (~10 hour lifetime) and auto-refreshed
 - See docs/LMN_API.md for full endpoint details
 

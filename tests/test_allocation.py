@@ -161,3 +161,36 @@ def test_hourly_rate_picked_up_from_first_non_zero_rate():
     result = compute(_report(tasks))
     # First non-zero rate wins ($75 from Mon).
     assert result.rollups["A"].hourly_rate == 75.0
+
+
+def _work_task_with_notes(
+    date: str, foreman: str, jobsite_id: str, notes: str, hours: float = 4.0
+) -> Task:
+    task = _work_task(date, foreman, hours, jobsite_id, f"Cust {jobsite_id}")
+    task.notes = notes
+    return task
+
+
+def test_task_notes_rollup_preserves_order_and_dedupes():
+    tasks = [
+        _work_task_with_notes("Mon", "Jenna", "A", "Prune back shrub"),
+        _work_task_with_notes("Mon", "Jenna", "A", "Prune back shrub"),  # dup
+        _work_task_with_notes("Tue", "Cassie", "A", "Finished pruning"),
+        _work_task_with_notes("Mon", "Jenna", "B", "Load mulch"),
+        _work_task("Mon", "Kyle", 3.0, "A", "Cust A"),  # no notes — skipped
+    ]
+    shop_with_notes = _shop_task("Mon", "Jenna", 1.0)
+    shop_with_notes.notes = "Shop note ignored"
+    tasks.append(shop_with_notes)
+
+    result = compute(_report(tasks))
+
+    a_notes = result.rollups["A"].task_notes
+    assert a_notes == [
+        {"date": "Mon", "foreman": "Jenna", "notes": "Prune back shrub"},
+        {"date": "Tue", "foreman": "Cassie", "notes": "Finished pruning"},
+    ]
+    assert result.rollups["B"].task_notes == [
+        {"date": "Mon", "foreman": "Jenna", "notes": "Load mulch"},
+    ]
+    assert SHOP_JOBSITE_ID not in result.rollups

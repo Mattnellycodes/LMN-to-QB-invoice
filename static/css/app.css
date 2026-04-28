@@ -442,6 +442,20 @@ tr:hover td {
     border: 1px solid var(--color-danger-border);
 }
 
+.badge-irrigation {
+    display: inline-block;
+    padding: 2px 8px;
+    margin-left: 8px;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-family: var(--font-heading);
+    font-weight: 600;
+    background: var(--color-info-bg);
+    color: var(--color-text-heading);
+    border: 1px solid var(--color-info-border);
+    vertical-align: middle;
+}
+
 .file-remove {
     background: none;
     border: none;
@@ -688,6 +702,30 @@ tr:hover td {
 
 .zero-price-context-notes {
     color: var(--color-text);
+}
+
+.invoice-crew-notes {
+    margin: 10px 0 16px;
+    padding: 10px 14px;
+    background: var(--color-accent-soft);
+    border: 1px solid var(--color-accent);
+    border-radius: var(--radius);
+    font-size: 0.88rem;
+    color: var(--color-text);
+}
+
+.invoice-crew-notes ul {
+    margin: 6px 0 0;
+    padding-left: 18px;
+}
+
+.invoice-crew-notes li {
+    margin-bottom: 4px;
+}
+
+.invoice-crew-notes-meta {
+    color: var(--color-text-muted);
+    margin-right: 8px;
 }
 
 .zero-price-inputs {

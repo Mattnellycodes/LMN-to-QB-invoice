@@ -11,7 +11,9 @@ from typing import Any, Dict, List
 from src.calculations.allocation import compute
 from src.db.invoice_history import find_already_invoiced
 from src.invoice.line_items import (
+    MAINTENANCE_CLASS_NAME,
     InvoiceData,
+    InvoiceSource,
     LineItem,
     build_all_invoices,
     extract_zero_price_items,
@@ -34,27 +36,43 @@ class ProcessingError(Exception):
 def check_for_duplicates(invoices: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Look up prior invoices that overlap any (jobsite, date, foreman) triple.
 
+    For merged invoices (maint + Irr) we query each source jobsite separately
+    and collapse multiple hits for the same prior QBO invoice number into one
+    warning row — the user sees a single "already invoiced" entry per prior
+    invoice even when both sides overlapped.
+
     Silently returns [] if the DB is unavailable so the app keeps working
     without duplicate detection when running outside production.
     """
     duplicates: list[dict] = []
     try:
         for inv in invoices:
-            pairs = inv.get("date_foreman_pairs") or []
-            if not pairs:
-                continue
-            matches = find_already_invoiced(inv["jobsite_id"], pairs)
-            for m in matches:
-                duplicates.append(
-                    {
-                        "jobsite_id": inv["jobsite_id"],
-                        "customer_name": inv["customer_name"],
-                        "overlapping_pairs": m["overlapping_pairs"],
-                        "qbo_invoice_number": m["qbo_invoice_number"],
-                        "qbo_invoice_id": m["qbo_invoice_id"],
-                        "created_at": m["created_at"],
-                    }
-                )
+            sources = inv.get("sources") or []
+            seen_by_invoice_num: dict[str, dict] = {}
+            for src in sources:
+                pairs = src.get("date_foreman_pairs") or []
+                if not pairs:
+                    continue
+                for m in find_already_invoiced(src["jobsite_id"], pairs):
+                    key = m["qbo_invoice_number"] or m.get("qbo_invoice_id") or ""
+                    if key in seen_by_invoice_num:
+                        entry = seen_by_invoice_num[key]
+                        if src["jobsite_id"] not in entry["source_jobsite_ids"]:
+                            entry["source_jobsite_ids"].append(src["jobsite_id"])
+                        entry["overlapping_pairs"] = sorted(
+                            set(entry["overlapping_pairs"]) | set(m["overlapping_pairs"])
+                        )
+                    else:
+                        seen_by_invoice_num[key] = {
+                            "jobsite_id": inv["jobsite_id"],
+                            "source_jobsite_ids": [src["jobsite_id"]],
+                            "customer_name": inv["customer_name"],
+                            "overlapping_pairs": list(m["overlapping_pairs"]),
+                            "qbo_invoice_number": m["qbo_invoice_number"],
+                            "qbo_invoice_id": m["qbo_invoice_id"],
+                            "created_at": m["created_at"],
+                        }
+            duplicates.extend(seen_by_invoice_num.values())
     except Exception:
         logger.exception("Duplicate detection failed; returning no duplicates")
         return []
@@ -111,15 +129,18 @@ def process_uploaded_pdf(filename: str, content: BytesIO) -> Dict[str, Any]:
 
     zero_price_items: list[dict] = []
     for invoice in invoices:
-        rollup = allocation.rollups.get(invoice.jobsite_id)
-        if rollup is None:
-            continue
-        for item in extract_zero_price_items(rollup.services, included):
-            item["jobsite_id"] = invoice.jobsite_id
-            item["jobsite_name"] = invoice.jobsite_name
-            item["customer_name"] = invoice.customer_name
-            item["index"] = len(zero_price_items)
-            zero_price_items.append(item)
+        for src in invoice.sources:
+            rollup = allocation.rollups.get(src.jobsite_id)
+            if rollup is None:
+                continue
+            for item in extract_zero_price_items(rollup.services, included):
+                item["jobsite_id"] = src.jobsite_id
+                item["jobsite_name"] = rollup.customer_name
+                item["customer_name"] = invoice.customer_name
+                item["invoice_primary_jobsite_id"] = invoice.jobsite_id
+                item["class_name"] = src.class_name
+                item["index"] = len(zero_price_items)
+                zero_price_items.append(item)
 
     mappings = load_mapping_from_lmn_api()
     lmn_mapping_count = len(mappings)
@@ -277,6 +298,7 @@ def invoice_to_dict(invoice: InvoiceData) -> Dict[str, Any]:
                 "rate": float(item.rate),
                 "amount": float(item.amount),
                 "item_lookup_name": str(item.item_lookup_name or ""),
+                "class_name": str(item.class_name or MAINTENANCE_CLASS_NAME),
                 "qbo_item_name": None,
                 "uses_fallback": False,
             }
@@ -285,9 +307,36 @@ def invoice_to_dict(invoice: InvoiceData) -> Dict[str, Any]:
         "subtotal": float(invoice.subtotal),
         "direct_payment_fee": float(invoice.direct_payment_fee),
         "total": float(invoice.total),
-        "work_dates": [str(d) for d in invoice.work_dates],
-        "foremen": [str(f) for f in invoice.foremen],
-        "date_foreman_pairs": [str(p) for p in invoice.date_foreman_pairs],
+        "has_irrigation": bool(invoice.has_irrigation),
+        "sources": [
+            {
+                "jobsite_id": str(s.jobsite_id),
+                "jobsite_name": str(s.jobsite_name),
+                "class_name": str(s.class_name),
+                "work_dates": [str(d) for d in s.work_dates],
+                "foremen": [str(f) for f in s.foremen],
+                "date_foreman_pairs": [str(p) for p in s.date_foreman_pairs],
+                "task_notes": [
+                    {
+                        "date": str(n.get("date", "")),
+                        "foreman": str(n.get("foreman", "")),
+                        "notes": str(n.get("notes", "")),
+                    }
+                    for n in s.task_notes
+                ],
+            }
+            for s in invoice.sources
+        ],
+        # Flattened task_notes across all sources — the results template
+        # renders a single crew-notes list so keep the top-level contract.
+        "task_notes": [
+            {
+                "date": str(n.get("date", "")),
+                "foreman": str(n.get("foreman", "")),
+                "notes": str(n.get("notes", "")),
+            }
+            for n in invoice.task_notes
+        ],
     }
 
 
@@ -303,19 +352,12 @@ def create_qbo_invoices(
     or QBO will reject the invoice; the fallback `"Other"` ItemRef covers
     unmatched names.
     """
-    from src.qbo.classes import DEFAULT_CLASS_NAME, ClassMappingError, get_class_by_name
+    from src.qbo.classes import get_required_class_refs
     from src.qbo.context import get_qbo_credentials
     from src.qbo.invoices import create_draft_invoice
 
     access_token, realm_id = get_qbo_credentials()
-    class_ref = get_class_by_name(access_token, realm_id, DEFAULT_CLASS_NAME)
-    if class_ref is None:
-        logger.error("Required QBO Class '%s' not found", DEFAULT_CLASS_NAME)
-        raise ClassMappingError(
-            f"QBO Class named '{DEFAULT_CLASS_NAME}' is required on every "
-            "invoice line. Create it in QuickBooks (Settings → All Lists → "
-            "Classes) before creating invoices."
-        )
+    class_refs_by_name = get_required_class_refs(access_token, realm_id)
 
     logger.info("Creating %d draft invoice(s) in QBO", len(invoices))
     results: list[dict] = []
@@ -333,22 +375,32 @@ def create_qbo_invoices(
                     rate=item["rate"],
                     amount=item["amount"],
                     item_lookup_name=item.get("item_lookup_name", ""),
+                    class_name=item.get("class_name") or MAINTENANCE_CLASS_NAME,
                 )
                 for item in inv_dict["line_items"]
             ],
             subtotal=inv_dict["subtotal"],
             direct_payment_fee=inv_dict["direct_payment_fee"],
             total=inv_dict["total"],
-            work_dates=inv_dict.get("work_dates", []),
-            foremen=inv_dict.get("foremen", []),
-            date_foreman_pairs=inv_dict.get("date_foreman_pairs", []),
+            sources=[
+                InvoiceSource(
+                    jobsite_id=str(s["jobsite_id"]),
+                    jobsite_name=str(s.get("jobsite_name", "")),
+                    class_name=str(s.get("class_name") or MAINTENANCE_CLASS_NAME),
+                    work_dates=list(s.get("work_dates", [])),
+                    foremen=list(s.get("foremen", [])),
+                    date_foreman_pairs=list(s.get("date_foreman_pairs", [])),
+                    task_notes=[dict(n) for n in s.get("task_notes", [])],
+                )
+                for s in inv_dict.get("sources", [])
+            ],
         )
 
         result = create_draft_invoice(
             invoice,
             qbo_customer_id=inv_dict["qbo_customer_id"],
             item_refs=item_refs,
-            class_ref=class_ref,
+            class_refs_by_name=class_refs_by_name,
         )
 
         if result.success:

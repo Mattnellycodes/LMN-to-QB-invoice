@@ -61,6 +61,10 @@ class JobsiteRollup:
     # Used as the QBO item lookup key for the labor line; separate from the
     # customer-facing invoice description.
     hourly_rate_name: str = ""
+    # Crew notes recorded on billable tasks for this jobsite, de-duplicated
+    # on (date, foreman, notes) and preserved in first-seen order. Shown to
+    # the reviewer on the invoice preview; not pushed to QBO.
+    task_notes: list[dict] = field(default_factory=list)
 
     @property
     def work_hours(self) -> float:
@@ -127,6 +131,15 @@ def compute(report: ParsedReport) -> AllocationResult:
             rollup.services.append(
                 _service_to_dict(service, task)
             )
+
+        if task.notes:
+            entry = {
+                "date": task.date,
+                "foreman": task.foreman,
+                "notes": task.notes,
+            }
+            if entry not in rollup.task_notes:
+                rollup.task_notes.append(entry)
 
         if rollup.hourly_rate == 0.0:
             for rate_row in task.rates:

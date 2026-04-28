@@ -9,7 +9,7 @@ from typing import Dict, Optional
 
 import requests
 
-from src.invoice.line_items import InvoiceData, LineItem
+from src.invoice.line_items import MAINTENANCE_CLASS_NAME, InvoiceData, LineItem
 from src.qbo.context import get_qbo_credentials
 from src.qbo.customers import get_api_base_url
 
@@ -33,7 +33,7 @@ def create_draft_invoice(
     invoice_data: InvoiceData,
     qbo_customer_id: str,
     item_refs: Dict[str, Dict[str, str]],
-    class_ref: Optional[Dict[str, str]] = None,
+    class_refs_by_name: Optional[Dict[str, Dict[str, str]]] = None,
     terms: str = "Net 15",
 ) -> InvoiceResult:
     """
@@ -45,8 +45,9 @@ def create_draft_invoice(
         item_refs: Map of `item_lookup_name` -> QBO ItemRef. Every line's
             lookup name must resolve (unmatched names use the pre-fetched
             fallback ItemRef) — QBO rejects invoice lines missing ItemRef.
-        class_ref: Optional QBO ClassRef applied to every line. Requires
-            ClassTrackingPerTxnLine preference enabled on the company.
+        class_refs_by_name: Map of class name ("Maintenance"/"Irrigation")
+            to QBO ClassRef. Each line is tagged via `item.class_name`.
+            Requires ClassTrackingPerTxnLine preference on the company.
         terms: Payment terms (default Net 15)
 
     Returns:
@@ -58,12 +59,23 @@ def create_draft_invoice(
     invoice_date = datetime.strptime(invoice_data.invoice_date, "%Y-%m-%d")
     due_date = calculate_due_date(invoice_date, terms)
 
+    class_refs_by_name = class_refs_by_name or {}
+    default_class_ref = class_refs_by_name.get(MAINTENANCE_CLASS_NAME)
+
     # Build line items for QBO API
     qbo_lines = []
     for i, item in enumerate(invoice_data.line_items, start=1):
         ref = item_refs.get(item.item_lookup_name)
-        qbo_line = build_qbo_line_item(item, i, ref, class_ref=class_ref)
+        cref = class_refs_by_name.get(
+            item.class_name or MAINTENANCE_CLASS_NAME, default_class_ref
+        )
+        qbo_line = build_qbo_line_item(item, i, ref, class_ref=cref)
         qbo_lines.append(qbo_line)
+
+    source_ids = [s.jobsite_id for s in invoice_data.sources] or [invoice_data.jobsite_id]
+    private_note = (
+        "Created from LMN export. JobsiteIDs: " + ", ".join(source_ids)
+    )
 
     # Build invoice payload
     payload = {
@@ -71,7 +83,7 @@ def create_draft_invoice(
         "TxnDate": invoice_data.invoice_date,
         "DueDate": due_date.strftime("%Y-%m-%d"),
         "Line": qbo_lines,
-        "PrivateNote": f"Created from LMN export. JobsiteID: {invoice_data.jobsite_id}",
+        "PrivateNote": private_note,
     }
 
     url = f"{get_api_base_url()}/{realm_id}/invoice"
@@ -102,19 +114,25 @@ def create_draft_invoice(
         invoice_number = invoice.get("DocNumber")
         total_amt = float(invoice.get("TotalAmt", 0))
 
-        # Record invoice history for duplicate detection
+        # Record invoice history for duplicate detection.
+        # Merged (maint + Irr) invoices write one row per source so future
+        # uploads catch overlap on either side.
         try:
             from src.db.invoice_history import record_invoice_creation
-            if invoice_id and invoice_data.date_foreman_pairs:
-                record_invoice_creation(
-                    jobsite_id=invoice_data.jobsite_id,
-                    work_dates=invoice_data.work_dates,
-                    foremen=invoice_data.foremen,
-                    date_foreman_pairs=invoice_data.date_foreman_pairs,
-                    qbo_invoice_id=invoice_id,
-                    qbo_invoice_number=invoice_number or "",
-                    total_amount=total_amt,
-                )
+
+            if invoice_id:
+                for src in invoice_data.sources:
+                    if not src.date_foreman_pairs:
+                        continue
+                    record_invoice_creation(
+                        jobsite_id=src.jobsite_id,
+                        work_dates=src.work_dates,
+                        foremen=src.foremen,
+                        date_foreman_pairs=src.date_foreman_pairs,
+                        qbo_invoice_id=invoice_id,
+                        qbo_invoice_number=invoice_number or "",
+                        total_amount=total_amt,
+                    )
         except Exception:
             logger.exception(
                 "Failed to record invoice history for jobsite=%s invoice_id=%s",
