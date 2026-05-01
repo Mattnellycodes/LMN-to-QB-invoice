@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from src.parsing.pdf_parser import (
     SHOP_JOBSITE_ID,
@@ -30,6 +31,23 @@ logger = logging.getLogger(__name__)
 
 
 BILLABLE_COST_CODE = "200"
+
+NO_SHOP_ALLOCATION_PATH = (
+    Path(__file__).resolve().parents[2] / "config" / "no_shop_allocation.txt"
+)
+
+
+def load_excluded_jobsites(path: Path = NO_SHOP_ALLOCATION_PATH) -> frozenset[str]:
+    """Load JobsiteIDs that should not receive any shop-pool allocation."""
+    if not path.exists():
+        return frozenset()
+    ids: set[str] = set()
+    for raw in path.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        ids.add(line)
+    return frozenset(ids)
 
 
 @dataclass
@@ -101,8 +119,16 @@ def build_shop_pool(tasks: list[Task]) -> dict[tuple[str, str], float]:
     return dict(pool)
 
 
-def compute(report: ParsedReport) -> AllocationResult:
-    """Roll up the parsed report into per-jobsite invoice inputs."""
+def compute(
+    report: ParsedReport,
+    excluded_from_shop: frozenset[str] = frozenset(),
+) -> AllocationResult:
+    """Roll up the parsed report into per-jobsite invoice inputs.
+
+    Jobsite IDs in `excluded_from_shop` still get their own rollup (with real
+    work hours and services) but are skipped during shop-pool allocation, so
+    the remaining billable jobsites for that (date, foreman) absorb the pool.
+    """
     shop_pool = build_shop_pool(report.tasks)
     rollups: dict[str, JobsiteRollup] = {}
 
@@ -154,6 +180,8 @@ def compute(report: ParsedReport) -> AllocationResult:
     # hours are zero.
     jobsites_by_day_foreman: dict[tuple[str, str], set[str]] = defaultdict(set)
     for jobsite_id, rollup in rollups.items():
+        if jobsite_id in excluded_from_shop:
+            continue
         for (date, foreman) in rollup.work_by_date_foreman:
             jobsites_by_day_foreman[(date, foreman)].add(jobsite_id)
 
