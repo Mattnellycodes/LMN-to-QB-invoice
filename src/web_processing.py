@@ -10,7 +10,7 @@ from hashlib import sha256
 from io import BytesIO
 from typing import Any, Dict, List
 
-from src.calculations.allocation import compute
+from src.calculations.allocation import compute, load_excluded_jobsites
 from src.db.invoice_history import find_already_invoiced
 from src.invoice.line_items import (
     MAINTENANCE_CLASS_NAME,
@@ -222,11 +222,13 @@ def _process_parsed_report(
         int((time.monotonic() - t0) * 1000),
     )
 
-    allocation = compute(report)
+    excluded_from_shop = load_excluded_jobsites()
+    allocation = compute(report, excluded_from_shop=excluded_from_shop)
     logger.info(
-        "Allocation: shop_pool_entries=%d rollups=%d",
+        "Allocation: shop_pool_entries=%d rollups=%d excluded_from_shop=%d",
         len(allocation.shop_pool),
         len(allocation.rollups),
+        len(excluded_from_shop),
     )
     shop_missing = (
         SHOP_JOBSITE_ID not in report.customers or not allocation.shop_pool

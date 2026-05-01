@@ -1,0 +1,9 @@
+# Jobsite IDs that should NOT receive any *SHOP drive/load-time allocation.
+# Their billable work hours (CostCode 200) still build a normal invoice;
+# they are simply removed from the allocation denominator, so the shop pool
+# for that (date, foreman) is split among the remaining billable jobsites.
+#
+# One JobsiteID per line, exact match. Lines starting with # are comments.
+# Blank lines are ignored.
+
+5923036W

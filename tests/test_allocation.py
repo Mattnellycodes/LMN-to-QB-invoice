@@ -8,6 +8,7 @@ from src.calculations.allocation import (
     BILLABLE_COST_CODE,
     build_shop_pool,
     compute,
+    load_excluded_jobsites,
 )
 from src.parsing.pdf_parser import (
     SHOP_JOBSITE_ID,
@@ -139,6 +140,37 @@ def test_allocation_breakdown_captures_each_day():
     tue = next(r for r in breakdown if r.date == "Tue")
     assert mon.share == pytest.approx(2.0)
     assert tue.share == pytest.approx(1.0)
+
+
+def test_excluded_jobsite_does_not_receive_or_dilute_shop_pool():
+    """Excluded jobsite gets its work hours but no drive share; remaining jobsites absorb the pool."""
+    tasks = [
+        _shop_task("Mon", "Jenna", 6.0),
+        _work_task("Mon", "Jenna", 10.0, "A", "Cust A"),
+        _work_task("Mon", "Jenna", 5.0, "B", "Cust B"),
+        _work_task("Mon", "Jenna", 3.0, "EXCLUDED", "Maintenance Land Time"),
+    ]
+    result = compute(_report(tasks), excluded_from_shop=frozenset({"EXCLUDED"}))
+
+    # EXCLUDED keeps its work hours but receives no allocation.
+    excluded = result.rollups["EXCLUDED"]
+    assert excluded.work_hours == pytest.approx(3.0)
+    assert excluded.allocated_drive_hours == 0.0
+
+    # A and B split the full 6-hour pool weighted by their own work hours only
+    # (denominator = 10 + 5 = 15, NOT 18).
+    assert result.rollups["A"].allocated_drive_hours == pytest.approx(6 * 10 / 15)
+    assert result.rollups["B"].allocated_drive_hours == pytest.approx(6 * 5 / 15)
+
+
+def test_load_excluded_jobsites_handles_comments_and_blanks(tmp_path):
+    path = tmp_path / "no_shop_allocation.txt"
+    path.write_text("# header comment\n\n5923036W\n  \n# trailing\nABC123\n")
+    assert load_excluded_jobsites(path) == frozenset({"5923036W", "ABC123"})
+
+
+def test_load_excluded_jobsites_missing_file_returns_empty(tmp_path):
+    assert load_excluded_jobsites(tmp_path / "does_not_exist.txt") == frozenset()
 
 
 def test_zero_work_hours_falls_back_to_equal_split():
