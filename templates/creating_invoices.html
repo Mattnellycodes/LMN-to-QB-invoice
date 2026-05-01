@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+
+{% block title %}Creating Invoices…{% endblock %}
+
+{% block content %}
+<h1>Creating draft invoices in QuickBooks…</h1>
+
+<p>This page will refresh automatically when the run finishes. You can leave it
+open; the work continues even if you reload.</p>
+
+<div class="progress-text">
+    <span id="completed-count">0</span> of <span id="total-count">{{ total }}</span> created
+</div>
+<div class="progress-bar">
+    <div class="progress-bar-fill" id="progress-fill" style="width: 0%"></div>
+</div>
+<div class="progress-text" id="current-line" style="margin-top: 8px; min-height: 1.2em;"></div>
+
+<div id="error-box" class="flash error" style="display: none; margin-top: 20px;"></div>
+
+<div class="home-actions" id="error-actions" style="display: none; margin-top: 20px;">
+    <a href="{{ url_for('results') }}" class="btn btn-secondary">Back to preview</a>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    var total = {{ total }};
+    var fill = document.getElementById('progress-fill');
+    var completedEl = document.getElementById('completed-count');
+    var currentLine = document.getElementById('current-line');
+    var errorBox = document.getElementById('error-box');
+    var errorActions = document.getElementById('error-actions');
+    var pollTimer = null;
+
+    function stopPolling() {
+        if (pollTimer !== null) {
+            clearInterval(pollTimer);
+            pollTimer = null;
+        }
+    }
+
+    function showError(msg) {
+        stopPolling();
+        errorBox.textContent = 'Error creating invoices: ' + (msg || 'unknown error');
+        errorBox.style.display = 'block';
+        errorActions.style.display = 'flex';
+    }
+
+    function tick() {
+        fetch('{{ url_for("create_invoices_progress") }}', { credentials: 'same-origin' })
+            .then(function (r) {
+                if (!r.ok) {
+                    return r.json().then(function () { throw new Error('progress not available'); });
+                }
+                return r.json();
+            })
+            .then(function (data) {
+                var completed = data.completed || 0;
+                var t = data.total || total;
+                completedEl.textContent = completed;
+                var pct = t > 0 ? Math.min(100, Math.round((completed / t) * 100)) : 0;
+                fill.style.width = pct + '%';
+                if (data.current) {
+                    currentLine.textContent = 'Working on: ' + data.current;
+                } else if (data.status === 'done') {
+                    currentLine.textContent = 'Done.';
+                } else {
+                    currentLine.textContent = '';
+                }
+
+                if (data.status === 'done' && data.redirect) {
+                    stopPolling();
+                    window.location = data.redirect;
+                } else if (data.status === 'error') {
+                    showError(data.error);
+                }
+            })
+            .catch(function (err) {
+                console.warn('progress poll failed', err);
+            });
+    }
+
+    tick();
+    pollTimer = setInterval(tick, 1000);
+})();
+</script>
+{% endblock %}

@@ -189,6 +189,116 @@ def create_draft_invoice(
         )
 
 
+@dataclass
+class DeleteResult:
+    """Result of deleting an invoice in QBO."""
+
+    success: bool
+    invoice_id: str
+    error: Optional[str] = None
+
+
+def delete_invoice(invoice_id: str) -> DeleteResult:
+    """Delete a QBO invoice by ID.
+
+    Fast path: drafts created by this app are never edited, so their SyncToken
+    is "0". POST `?operation=delete` with `SyncToken="0"` directly. Only on a
+    SyncToken mismatch (rare — only if something else touched the invoice) do
+    we fall back to GET-then-POST. Halves wall time on the common path.
+    """
+    access_token, realm_id = get_qbo_credentials()
+    base = f"{get_api_base_url()}/{realm_id}/invoice"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+
+    def _post_delete(sync_token: str) -> requests.Response:
+        return requests.post(
+            f"{base}?operation=delete",
+            headers=headers,
+            json={"Id": invoice_id, "SyncToken": sync_token},
+        )
+
+    def _format_http_error(e: requests.exceptions.HTTPError) -> str:
+        msg = str(e)
+        try:
+            detail = e.response.json()
+            if "Fault" in detail:
+                errs = detail["Fault"].get("Error", [])
+                if errs:
+                    msg = errs[0].get("Detail", msg)
+        except Exception:
+            pass
+        return msg
+
+    try:
+        resp = _post_delete("0")
+        if resp.status_code == 200:
+            logger.info("Deleted QBO invoice id=%s (sync=0 fast path)", invoice_id)
+            return DeleteResult(success=True, invoice_id=invoice_id)
+
+        # Fallback: 4xx may mean SyncToken mismatch. Fetch the invoice and retry.
+        if 400 <= resp.status_code < 500:
+            get_resp = requests.get(f"{base}/{invoice_id}", headers=headers)
+            get_resp.raise_for_status()
+            sync_token = get_resp.json().get("Invoice", {}).get("SyncToken")
+            if sync_token is None:
+                return DeleteResult(
+                    success=False,
+                    invoice_id=invoice_id,
+                    error="Missing SyncToken on fetched invoice",
+                )
+            retry = _post_delete(str(sync_token))
+            retry.raise_for_status()
+            logger.info(
+                "Deleted QBO invoice id=%s (sync=%s after fast-path 4xx)",
+                invoice_id,
+                sync_token,
+            )
+            return DeleteResult(success=True, invoice_id=invoice_id)
+
+        resp.raise_for_status()
+        return DeleteResult(success=True, invoice_id=invoice_id)
+
+    except requests.exceptions.HTTPError as e:
+        error_msg = _format_http_error(e)
+        logger.error(
+            "QBO delete failed: id=%s status=%s error=%s",
+            invoice_id,
+            getattr(e.response, "status_code", "?"),
+            error_msg,
+        )
+        return DeleteResult(success=False, invoice_id=invoice_id, error=error_msg)
+    except Exception as e:
+        logger.exception("Unexpected error deleting invoice id=%s", invoice_id)
+        return DeleteResult(success=False, invoice_id=invoice_id, error=str(e))
+
+
+def query_invoices_created_since(iso_datetime: str) -> list:
+    """Return QBO invoices with MetaData.CreateTime >= the given ISO-8601 timestamp.
+
+    Each entry is the raw QBO Invoice dict (includes Id, DocNumber, CustomerRef,
+    TotalAmt, MetaData.CreateTime). Used by the cleanup preview to detect
+    QBO-side invoices that have no matching invoice_history row.
+    """
+    access_token, realm_id = get_qbo_credentials()
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/json",
+    }
+    query = (
+        "SELECT Id, DocNumber, CustomerRef, TotalAmt, MetaData "
+        f"FROM Invoice WHERE MetaData.CreateTime >= '{iso_datetime}' "
+        "MAXRESULTS 1000"
+    )
+    url = f"{get_api_base_url()}/{realm_id}/query"
+    resp = requests.get(url, headers=headers, params={"query": query})
+    resp.raise_for_status()
+    return resp.json().get("QueryResponse", {}).get("Invoice", [])
+
+
 def build_qbo_line_item(
     item: LineItem,
     line_num: int,

@@ -8,7 +8,7 @@ from datetime import datetime
 from dataclasses import dataclass
 from hashlib import sha256
 from io import BytesIO
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 from src.calculations.allocation import compute, load_excluded_jobsites
 from src.db.invoice_history import find_already_invoiced
@@ -76,7 +76,8 @@ def check_for_duplicates(invoices: List[Dict[str, Any]]) -> List[Dict[str, Any]]
                         if src["jobsite_id"] not in entry["source_jobsite_ids"]:
                             entry["source_jobsite_ids"].append(src["jobsite_id"])
                         entry["overlapping_pairs"] = sorted(
-                            set(entry["overlapping_pairs"]) | set(m["overlapping_pairs"])
+                            set(entry["overlapping_pairs"])
+                            | set(m["overlapping_pairs"])
                         )
                     else:
                         seen_by_invoice_num[key] = {
@@ -93,7 +94,9 @@ def check_for_duplicates(invoices: List[Dict[str, Any]]) -> List[Dict[str, Any]]
         logger.exception("Duplicate detection failed; returning no duplicates")
         return []
     if duplicates:
-        logger.info("Duplicate detection: %d overlapping prior invoices", len(duplicates))
+        logger.info(
+            "Duplicate detection: %d overlapping prior invoices", len(duplicates)
+        )
     return duplicates
 
 
@@ -105,7 +108,9 @@ def process_uploaded_pdf(filename: str, content: BytesIO) -> Dict[str, Any]:
     and `summary`.
     """
     content.seek(0)
-    return process_uploaded_pdfs([UploadedPdf(filename=filename, content=content.read())])
+    return process_uploaded_pdfs(
+        [UploadedPdf(filename=filename, content=content.read())]
+    )
 
 
 def process_uploaded_pdfs(files: list[UploadedPdf]) -> Dict[str, Any]:
@@ -160,9 +165,7 @@ def process_uploaded_pdfs(files: list[UploadedPdf]) -> Dict[str, Any]:
         combined.customers.update(report.customers)
         combined.tasks.extend(report.tasks)
 
-    upload_label = (
-        files[0].filename if len(files) == 1 else f"{len(files)} PDFs"
-    )
+    upload_label = files[0].filename if len(files) == 1 else f"{len(files)} PDFs"
     logger.info(
         "Processing upload batch: label=%s files=%d size=%d bytes tasks=%d",
         upload_label,
@@ -230,9 +233,7 @@ def _process_parsed_report(
         len(allocation.rollups),
         len(excluded_from_shop),
     )
-    shop_missing = (
-        SHOP_JOBSITE_ID not in report.customers or not allocation.shop_pool
-    )
+    shop_missing = SHOP_JOBSITE_ID not in report.customers or not allocation.shop_pool
     included = load_included_items()
     invoice_date = datetime.now().strftime("%Y-%m-%d")
     invoices = build_all_invoices(
@@ -455,6 +456,7 @@ def invoice_to_dict(invoice: InvoiceData) -> Dict[str, Any]:
 def create_qbo_invoices(
     invoices: List[Dict[str, Any]],
     item_refs: Dict[str, Dict[str, str]],
+    progress_callback: Optional[Callable[[int, int, Dict[str, Any]], None]] = None,
 ) -> List[Dict[str, Any]]:
     """Create draft invoices in QBO from session invoice dicts.
 
@@ -463,6 +465,10 @@ def create_qbo_invoices(
     in via `/item-mapping/save`). Every line description must have an entry
     or QBO will reject the invoice; the fallback `"Other"` ItemRef covers
     unmatched names.
+
+    If `progress_callback` is provided, it's invoked after each invoice with
+    `(completed, total, last_result)`. Callback errors are swallowed so they
+    can never abort invoice creation.
     """
     from src.qbo.classes import get_required_class_refs
     from src.qbo.context import get_qbo_credentials
@@ -508,6 +514,49 @@ def create_qbo_invoices(
             ],
         )
 
+        # Idempotency: if any source's (date|foreman) pairs already exist in
+        # invoice_history, skip. Protects against worker-death + retry creating
+        # duplicates of work that's already on a real QBO invoice from a prior
+        # attempt. Misses orphan QBO invoices that never made it to the table —
+        # those still need the cleanup admin route.
+        existing_match = None
+        for src in invoice.sources:
+            if not src.date_foreman_pairs:
+                continue
+            for m in find_already_invoiced(src.jobsite_id, src.date_foreman_pairs):
+                existing_match = m
+                break
+            if existing_match:
+                break
+
+        if existing_match:
+            logger.info(
+                "Skipped jobsite=%s — already invoiced in QBO (matching id=%s number=%s)",
+                invoice.jobsite_id,
+                existing_match.get("qbo_invoice_id"),
+                existing_match.get("qbo_invoice_number"),
+            )
+            results.append(
+                {
+                    "success": True,
+                    "skipped": True,
+                    "jobsite_id": invoice.jobsite_id,
+                    "customer_name": inv_dict.get("qbo_display_name")
+                    or invoice.customer_name,
+                    "invoice_id": existing_match.get("qbo_invoice_id"),
+                    "invoice_number": existing_match.get("qbo_invoice_number"),
+                    "total": 0.0,
+                    "error": None,
+                    "reason": "already invoiced",
+                }
+            )
+            if progress_callback is not None:
+                try:
+                    progress_callback(len(results), len(invoices), results[-1])
+                except Exception:
+                    logger.exception("progress_callback raised; continuing")
+            continue
+
         result = create_draft_invoice(
             invoice,
             qbo_customer_id=inv_dict["qbo_customer_id"],
@@ -534,12 +583,19 @@ def create_qbo_invoices(
             {
                 "success": result.success,
                 "jobsite_id": result.jobsite_id,
-                "customer_name": inv_dict.get("qbo_display_name") or result.customer_name,
+                "customer_name": inv_dict.get("qbo_display_name")
+                or result.customer_name,
                 "invoice_id": result.invoice_id,
                 "invoice_number": result.invoice_number,
                 "total": result.total,
                 "error": result.error,
             }
         )
+
+        if progress_callback is not None:
+            try:
+                progress_callback(len(results), len(invoices), results[-1])
+            except Exception:
+                logger.exception("progress_callback raised; continuing")
 
     return results
