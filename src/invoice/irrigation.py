@@ -22,9 +22,12 @@ from src.calculations.allocation import JobsiteRollup
 logger = logging.getLogger(__name__)
 
 
-# Matches the literal " - Irr." suffix, case-insensitive, with optional
-# surrounding whitespace on either side of the dash and after the period.
-IRR_SUFFIX_RE = re.compile(r"\s*-\s*Irr\.\s*$", re.IGNORECASE)
+# Matches LMN's irrigation-suffix variants, case-insensitive:
+#   " - Irr.", "-Irr.", " - Irr", " - Irrigation", "-Irrigation", etc.
+# Optional whitespace around the dash, optional period, optional "igation"
+# expansion. The maintenance counterpart sheds the suffix entirely so paired
+# names match by `_match_key` after stripping.
+IRR_SUFFIX_RE = re.compile(r"\s*-\s*Irr(?:igation)?\.?\s*$", re.IGNORECASE)
 
 
 def has_irr_suffix(name: Optional[str]) -> bool:
@@ -68,7 +71,7 @@ def pair_rollups(rollups: Iterable[JobsiteRollup]) -> list[RollupGroup]:
     maint_rollups: list[JobsiteRollup] = []
     irr_rollups: list[JobsiteRollup] = []
     for r in rollups:
-        if has_irr_suffix(r.customer_name):
+        if r.is_irrigation:
             irr_rollups.append(r)
         else:
             maint_rollups.append(r)
@@ -96,9 +99,14 @@ def pair_rollups(rollups: Iterable[JobsiteRollup]) -> list[RollupGroup]:
     for irr in irr_rollups:
         key = _match_key(irr.customer_name)
         match = index.get(key)
-        if match is not None:
+        # Belt-and-suspenders: skip a maint rollup that was already consumed
+        # by a previous Irr rollup with the same stripped name. Without this,
+        # two Irr rollups whose stripped names collide would both pair with
+        # (and double-bill) the same maintenance rollup.
+        if match is not None and match.jobsite_id not in used_maint_ids:
             groups.append(RollupGroup(maintenance=match, irrigation=irr))
             used_maint_ids.add(match.jobsite_id)
+            del index[key]
             logger.debug(
                 "Paired irrigation %r (id=%s) with maintenance %r (id=%s)",
                 irr.customer_name,

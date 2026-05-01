@@ -380,16 +380,24 @@ def build_invoice_for_group(
         invoice_date=invoice_date,
     )
 
+    def _emit_sources(rollup: JobsiteRollup, class_name: str) -> list:
+        # Bundle-merged rollups expose one source per contributing jobsite so
+        # downstream zero-price-item lookup, duplicate detection, and
+        # invoice_history rows stay keyed per LMN jobsite.
+        if rollup.member_rollups:
+            return [_make_invoice_source(m, class_name) for m in rollup.member_rollups]
+        return [_make_invoice_source(rollup, class_name)]
+
     if maint is not None:
         invoice.line_items.extend(
             _build_rollup_lines(maint, included, MAINTENANCE_CLASS_NAME)
         )
-        invoice.sources.append(_make_invoice_source(maint, MAINTENANCE_CLASS_NAME))
+        invoice.sources.extend(_emit_sources(maint, MAINTENANCE_CLASS_NAME))
     if irr is not None:
         invoice.line_items.extend(
             _build_rollup_lines(irr, included, IRRIGATION_CLASS_NAME)
         )
-        invoice.sources.append(_make_invoice_source(irr, IRRIGATION_CLASS_NAME))
+        invoice.sources.extend(_emit_sources(irr, IRRIGATION_CLASS_NAME))
 
     _finalize_invoice(invoice)
     return invoice
@@ -407,7 +415,7 @@ def build_invoice(
     """
     from src.invoice.irrigation import RollupGroup, has_irr_suffix
 
-    if has_irr_suffix(rollup.customer_name):
+    if rollup.is_irrigation or has_irr_suffix(rollup.customer_name):
         group = RollupGroup(maintenance=None, irrigation=rollup)
     else:
         group = RollupGroup(maintenance=rollup, irrigation=None)
@@ -425,6 +433,7 @@ def build_all_invoices(
     name in the same upload), emits one InvoiceData per resulting group, and
     drops groups with zero subtotal.
     """
+    from src.invoice.bundles import apply_bundles
     from src.invoice.irrigation import pair_rollups
 
     if included is None:
@@ -432,7 +441,10 @@ def build_all_invoices(
     logger.debug("Included-items allow-list size: %d", len(included))
 
     rollups_list = list(rollups)
-    groups = pair_rollups(rollups_list)
+    # Hardcoded bundles (e.g., Cannery HOA's 8 jobsites) collapse before
+    # name-suffix pairing — their grouping is fixed by the bundle config.
+    non_bundled, bundle_groups = apply_bundles(rollups_list)
+    groups = bundle_groups + pair_rollups(non_bundled)
 
     invoices: list[InvoiceData] = []
     skipped = 0

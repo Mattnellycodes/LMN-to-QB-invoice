@@ -226,3 +226,47 @@ def test_task_notes_rollup_preserves_order_and_dedupes():
         {"date": "Mon", "foreman": "Jenna", "notes": "Load mulch"},
     ]
     assert SHOP_JOBSITE_ID not in result.rollups
+
+
+def test_irrigation_cost_code_classifies_rollup_as_irrigation():
+    # cost_code_num=="100" (Installation) flips is_irrigation on the rollup;
+    # the rollup is built normally otherwise.
+    irr_task = Task(
+        date="Mon-Apr-13-2026",
+        customer_name="Sample Customer - Irr.",
+        jobsite_id="IRR1",
+        task_name="Irrigation Install",
+        cost_code_num="100",
+        foreman="Josh",
+        task_man_hrs=5.17,
+        rates=[RateRow(description="Irrigation Technician Hourly Labor",
+                       qty="5.17", rate="$95.00", total_price="$490.83")],
+    )
+    maint_task = _work_task("Mon-Apr-13-2026", "Cassie", 8.0, "MAINT1", "Sample Customer")
+    result = compute(_report([irr_task, maint_task]))
+
+    assert result.rollups["IRR1"].is_irrigation is True
+    assert result.rollups["IRR1"].hourly_rate == pytest.approx(95.0)
+    assert result.rollups["MAINT1"].is_irrigation is False
+
+
+def test_billable_cost_code_filter_no_longer_drops_non_200():
+    # Tasks with arbitrary cost codes still build a rollup — the only excluded
+    # source remains the *SHOP jobsite (drive-time pool).
+    tasks = [
+        _work_task("Mon-Apr-13-2026", "Jenna", 4.0, "JOB1", "Cust 1"),
+        Task(
+            date="Mon-Apr-13-2026",
+            customer_name="Cust 2",
+            jobsite_id="JOB2",
+            task_name="Misc",
+            cost_code_num="100",  # Installation
+            foreman="Jenna",
+            task_man_hrs=3.0,
+            rates=[RateRow(description="Irrigation Technician Hourly Labor",
+                           qty="3.0", rate="$95.00", total_price="$285.00")],
+        ),
+    ]
+    result = compute(_report(tasks))
+    assert "JOB1" in result.rollups
+    assert "JOB2" in result.rollups
