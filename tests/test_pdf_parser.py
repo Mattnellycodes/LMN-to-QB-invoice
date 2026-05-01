@@ -67,6 +67,19 @@ def test_notes_captured_for_billable_tasks(report):
     assert len(with_notes) == 22
 
 
+def test_multi_line_notes_accumulated(report):
+    """Notes that span multiple PDF rows must be captured in full.
+
+    Regression for the bug where the parser only kept the row containing
+    the literal 'Notes:' label and silently dropped every continuation row.
+    """
+    multi_line = [t for t in report.tasks if "\n" in t.notes]
+    assert multi_line, (
+        "Expected at least one task with a multi-line note; if this fails, "
+        "the parser is dropping note continuation rows again."
+    )
+
+
 def test_page_break_continuation_not_dropped(report):
     """Shop tasks whose fields span a page break must still be captured."""
     shop_tasks = [t for t in report.tasks if t.jobsite_id == SHOP_JOBSITE_ID]
