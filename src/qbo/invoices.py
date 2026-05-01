@@ -309,15 +309,28 @@ def build_qbo_line_item(
     Build a QBO API line item from our LineItem.
 
     Uses SalesItemLineDetail for proper invoice formatting.
+
+    QBO validates `Amount == round(Qty * UnitPrice, 2)`. Aggregating multiple
+    LMN entries with different per-entry rates can leave `item.rate`
+    inconsistent with `item.amount`, so we derive UnitPrice from amount/qty
+    at 6-decimal precision — that's enough to round-trip cleanly through
+    QBO's check while preserving the LMN-reported amount as ground truth.
     """
+    amount = round(item.amount, 2)
+    qty = item.quantity or 0
+    if qty > 0 and amount != 0:
+        unit_price = round(amount / qty, 6)
+    else:
+        unit_price = round(item.rate or 0, 6)
+
     line = {
         "LineNum": line_num,
         "DetailType": "SalesItemLineDetail",
-        "Amount": round(item.amount, 2),
+        "Amount": amount,
         "Description": item.description,
         "SalesItemLineDetail": {
-            "Qty": item.quantity,
-            "UnitPrice": item.rate,
+            "Qty": qty,
+            "UnitPrice": unit_price,
         },
     }
 

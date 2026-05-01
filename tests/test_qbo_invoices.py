@@ -48,3 +48,39 @@ class TestBuildQboLineItem:
 
         assert payload["SalesItemLineDetail"]["ClassRef"] == class_ref
         assert "ItemRef" not in payload["SalesItemLineDetail"]
+
+    def test_unit_price_derived_so_qbo_amount_check_passes(self):
+        # The Ferrin, Andy failure: aggregated entries left rate=2.49 but the
+        # summed amount was 23.62 with qty=9.5 (real per-entry rate ~2.486).
+        # QBO rejects: 23.62 != round(9.5 * 2.49, 2) = 23.66.
+        item = LineItem(
+            description="Aggregated mixed-rate line",
+            quantity=9.5,
+            rate=2.49,  # stale aggregated rate
+            amount=23.62,  # ground-truth from LMN
+            item_lookup_name="Foo",
+        )
+
+        payload = build_qbo_line_item(item, line_num=1, item_ref=None)
+
+        amount = payload["Amount"]
+        qty = payload["SalesItemLineDetail"]["Qty"]
+        unit_price = payload["SalesItemLineDetail"]["UnitPrice"]
+
+        assert amount == 23.62
+        # QBO's invariant: round(Qty * UnitPrice, 2) must equal Amount.
+        assert round(qty * unit_price, 2) == amount
+
+    def test_zero_quantity_falls_back_to_rate(self):
+        item = LineItem(
+            description="Flat-fee line",
+            quantity=0.0,
+            rate=50.0,
+            amount=50.0,
+            item_lookup_name="Foo",
+        )
+
+        payload = build_qbo_line_item(item, line_num=1, item_ref=None)
+
+        assert payload["Amount"] == 50.0
+        assert payload["SalesItemLineDetail"]["UnitPrice"] == 50.0

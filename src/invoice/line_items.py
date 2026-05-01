@@ -227,8 +227,12 @@ def extract_service_line_items(
         else:
             existing.quantity = round(existing.quantity + qty, 4)
             existing.amount = round(existing.amount + total, 2)
-            # Keep the first non-zero rate seen; don't overwrite.
-            if existing.rate == 0 and rate > 0:
+            # Re-derive rate from the aggregated amount/qty so the LineItem
+            # stays internally consistent. Mixed per-entry rates would
+            # otherwise leave rate * quantity != amount and trip QBO's check.
+            if existing.quantity > 0:
+                existing.rate = round(existing.amount / existing.quantity, 6)
+            elif existing.rate == 0 and rate > 0:
                 existing.rate = rate
 
     return list(aggregated.values())
