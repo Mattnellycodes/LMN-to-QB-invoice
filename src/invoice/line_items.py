@@ -187,8 +187,18 @@ def _short_date(lmn_date: str) -> str:
         return ""
 
 
+# LMN service descriptions that should never appear on an invoice, regardless
+# of LMN's reported price. Reuses the silent-drop ("included") classification
+# below so neither the invoice nor the zero-price modal surfaces them.
+_ALWAYS_SKIP_DESCRIPTIONS: frozenset[str] = frozenset({
+    "IRR-STARTUP(VT)",
+})
+
+
 def _classify_service(description: str, total_price: float, included: frozenset[str]) -> str:
     """Return one of: 'billable', 'included', 'zero_price'."""
+    if description in _ALWAYS_SKIP_DESCRIPTIONS:
+        return "included"
     if total_price > 0:
         return "billable"
     if description in included:
