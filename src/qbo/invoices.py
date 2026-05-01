@@ -12,6 +12,9 @@ import requests
 from src.invoice.line_items import MAINTENANCE_CLASS_NAME, InvoiceData, LineItem
 from src.qbo.context import get_qbo_credentials
 from src.qbo.customers import get_api_base_url
+from src.qbo.terms import get_term_id_by_name
+
+DUE_ON_RECEIPT_TERM_NAME = "Due on receipt"
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +37,8 @@ def create_draft_invoice(
     qbo_customer_id: str,
     item_refs: Dict[str, Dict[str, str]],
     class_refs_by_name: Optional[Dict[str, Dict[str, str]]] = None,
-    terms: str = "Net 15",
+    terms: str = DUE_ON_RECEIPT_TERM_NAME,
+    bill_email: str = "",
 ) -> InvoiceResult:
     """
     Create a draft invoice in QuickBooks Online.
@@ -48,7 +52,10 @@ def create_draft_invoice(
         class_refs_by_name: Map of class name ("Maintenance"/"Irrigation")
             to QBO ClassRef. Each line is tagged via `item.class_name`.
             Requires ClassTrackingPerTxnLine preference on the company.
-        terms: Payment terms (default Net 15)
+        terms: Payment terms (default Due on receipt)
+        bill_email: Recipient email for the invoice. Resolved at preview
+            time from the QBO customer record. Empty string skips
+            BillEmail/EmailStatus on the payload (QBO rejects empty Address).
 
     Returns:
         InvoiceResult with success status and invoice details
@@ -85,6 +92,19 @@ def create_draft_invoice(
         "Line": qbo_lines,
         "PrivateNote": private_note,
     }
+
+    if bill_email:
+        payload["BillEmail"] = {"Address": bill_email}
+        payload["EmailStatus"] = "NeedToSend"
+
+    term_id = get_term_id_by_name(terms)
+    if term_id:
+        payload["SalesTermRef"] = {"value": term_id}
+    else:
+        logger.warning(
+            "QBO Term %r not found; posting invoice without SalesTermRef",
+            terms,
+        )
 
     url = f"{get_api_base_url()}/{realm_id}/invoice"
 

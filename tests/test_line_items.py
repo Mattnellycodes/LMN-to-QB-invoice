@@ -159,12 +159,28 @@ def test_direct_payment_fee_tiers():
     assert calculate_direct_payment_fee(2001) == 20.0
 
 
-def test_format_labor_description_single_and_range():
-    assert format_labor_description(["Mon-Apr-13-2026"]) == "Skilled Garden Hourly Labor 4/13"
+def test_format_labor_description_lists_each_visit():
+    assert format_labor_description(["Mon-Apr-13-2026"]) == "Skilled Garden Hourly Labor (4/13)"
     assert (
-        format_labor_description(["Mon-Apr-13-2026", "Wed-Apr-15-2026"])
-        == "Skilled Garden Hourly Labor 4/13-4/15"
+        format_labor_description(
+            ["Mon-Apr-7-2026", "Wed-Apr-9-2026", "Fri-Apr-11-2026"]
+        )
+        == "Skilled Garden Hourly Labor (4/7, 4/9, 4/11)"
     )
+
+
+def test_format_labor_description_irrigation_uses_irrigation_text():
+    assert (
+        format_labor_description(
+            ["Mon-Apr-28-2026", "Tue-Apr-29-2026"], is_irrigation=True
+        )
+        == "Irrigation Technician Hourly Labor (4/28, 4/29)"
+    )
+
+
+def test_format_labor_description_empty_dates_returns_base_only():
+    assert format_labor_description([]) == "Skilled Garden Hourly Labor"
+    assert format_labor_description([], is_irrigation=True) == "Irrigation Technician Hourly Labor"
 
 
 def test_build_invoice_aggregates_labor_and_items():
@@ -261,7 +277,7 @@ def test_labor_line_uses_rate_name_as_lookup_description_preserved():
     labor = inv.line_items[0]
 
     # Customer-facing description stays synthesized.
-    assert labor.description == "Skilled Garden Hourly Labor 4/13"
+    assert labor.description == "Skilled Garden Hourly Labor (4/13)"
     # QBO lookup key is the raw LMN rate name.
     assert labor.item_lookup_name == "Maintenance Skilled Hourly Labor - TOWN"
 

@@ -344,9 +344,12 @@ def _build_rollup_lines(
         # validation passes. Computing Amount from the raw hours while sending
         # a rounded Qty causes rejection when fractional hours are involved.
         qty = round(total_hours, 2)
+        is_irrigation = class_name == IRRIGATION_CLASS_NAME
         lines.append(
             LineItem(
-                description=format_labor_description(rollup.work_dates),
+                description=format_labor_description(
+                    rollup.work_dates, is_irrigation=is_irrigation
+                ),
                 quantity=qty,
                 rate=rate,
                 amount=round(qty * rate, 2),

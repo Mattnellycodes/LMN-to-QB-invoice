@@ -296,6 +296,8 @@ def _process_parsed_report(
     lmn_mapping_count = len(mappings)
     logger.info("Loaded %d customer mappings from LMN", lmn_mapping_count)
 
+    qbo_customer_emails = _load_qbo_customer_emails()
+
     jobsite_ids = [inv.jobsite_id for inv in invoices]
     unmapped_ids = find_unmapped_jobsites(jobsite_ids, mappings)
     if unmapped_ids:
@@ -320,23 +322,31 @@ def _process_parsed_report(
 
     mapped_count = 0
     total_amount = 0.0
+    missing_email_count = 0
     for inv_dict in all_invoices:
         mapping = mappings.get(str(inv_dict["jobsite_id"]))
         if mapping:
             inv_dict["qbo_customer_id"] = mapping.qbo_customer_id
             inv_dict["qbo_display_name"] = mapping.qbo_display_name
+            email = qbo_customer_emails.get(mapping.qbo_customer_id, "")
+            inv_dict["customer_email"] = email
+            if not email:
+                missing_email_count += 1
             mapped_count += 1
             total_amount += inv_dict["total"]
+        else:
+            inv_dict["customer_email"] = ""
 
     duplicates = check_for_duplicates(all_invoices)
 
     item_refs, fallback_lookup_names, fallback_error = _resolve_line_items(all_invoices)
 
     logger.info(
-        "Upload ready: invoices=%d mapped=%d fallback_lookups=%d "
+        "Upload ready: invoices=%d mapped=%d missing_email=%d fallback_lookups=%d "
         "zero_price=%d duplicates=%d total=$%.2f (%dms end-to-end)",
         len(invoices),
         mapped_count,
+        missing_email_count,
         len(fallback_lookup_names),
         len(zero_price_items),
         len(duplicates),
@@ -350,6 +360,7 @@ def _process_parsed_report(
         "duplicates": duplicates,
         "zero_price_items": zero_price_items,
         "lmn_mapping_count": lmn_mapping_count,
+        "missing_email_count": missing_email_count,
         "total_amount": total_amount,
         "item_refs": item_refs,
         "fallback_lookup_names": fallback_lookup_names,
@@ -361,12 +372,38 @@ def _process_parsed_report(
             "total_jobsites": len(invoices),
             "mapped_jobsites": mapped_count,
             "unmapped_jobsites": len(unmapped_jobsites),
+            "missing_email_count": missing_email_count,
             "duplicates_found": len(duplicates),
             "total_line_items": sum(len(inv["line_items"]) for inv in all_invoices),
             "fallback_items": len(fallback_lookup_names),
             "hardcoded_prices_applied": bool(use_hardcoded_prices),
         },
     }
+
+
+def _load_qbo_customer_emails() -> Dict[str, str]:
+    """Build a `{qbo_customer_id: email}` map from the QBO customer catalog.
+
+    Used at preview time to surface missing emails before invoices are pushed
+    and to carry the address through to `create_draft_invoice`. Returns `{}`
+    when QBO is unreachable so the preview still renders.
+    """
+    try:
+        from src.qbo.customers import get_all_customers
+
+        customers = get_all_customers()
+    except Exception:
+        logger.exception("Failed to load QBO customer catalog for email lookup")
+        return {}
+
+    emails: Dict[str, str] = {}
+    for customer in customers:
+        cid = str(customer.get("Id") or "")
+        if not cid:
+            continue
+        email = (customer.get("PrimaryEmailAddr") or {}).get("Address", "")
+        emails[cid] = email or ""
+    return emails
 
 
 def _resolve_line_items(
@@ -602,6 +639,7 @@ def create_qbo_invoices(
             qbo_customer_id=inv_dict["qbo_customer_id"],
             item_refs=item_refs,
             class_refs_by_name=class_refs_by_name,
+            bill_email=inv_dict.get("customer_email", ""),
         )
 
         if result.success:
