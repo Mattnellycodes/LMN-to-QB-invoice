@@ -9,6 +9,7 @@ import pytest
 from src.parsing.pdf_parser import (
     SHOP_JOBSITE_ID,
     PdfParseError,
+    _walk,
     parse_pdf,
 )
 
@@ -143,3 +144,221 @@ def test_single_digit_day_task_totals(billion_report):
     assert kree.date == "Tue-Apr-7-2026"
     assert kree.task_man_hrs == pytest.approx(2.93)
     assert any(s.total_price == "$13.75" for s in kree.services)
+
+
+# ---------------------------------------------------------------------------
+# Unit tests for the in_notes multi-line continuation logic added in PR
+# ---------------------------------------------------------------------------
+#
+# These tests exercise _walk() directly with synthetic page data so they run
+# without any sample PDF on disk.  The synthetic structure mirrors what
+# _extract_lines() would produce: pages[page][line][(x, y, text)].
+#
+# Each helper line is built as a list of (x, y, text) triples.  _line_text()
+# joins the text parts with spaces, so the exact coordinate values don't
+# matter as long as they are consistent floats.
+
+
+def _ln(*texts: str, y: float = 100.0) -> list[tuple[float, float, str]]:
+    """Return a synthetic PDF line: one (x, y, text) triple per token group."""
+    return [(float(i * 50), y, t) for i, t in enumerate(texts)]
+
+
+def _make_task_pages(note_lines: list[str], after_notes: list[str] | None = None) -> list:
+    """Build a minimal single-page synthetic PDF that produces one task.
+
+    The page contains:
+      - a customer header (jobsite ID token + name)
+      - a day header
+      - a Task Name: row
+      - a Notes: row (first element of note_lines)
+      - zero or more note continuation rows (remaining note_lines)
+      - any extra rows supplied via after_notes (e.g. a Services header)
+    """
+    # Customer header — jobsite token must match JOBSITE_ID_RE exactly.
+    customer_line = _ln("Acme Corp", "9999001A", y=900.0)
+
+    # Day header — tokens[0] must match DAY_HEADER_RE; line must contain
+    # "Total Man Hrs for Day".
+    day_line = _ln("Mon-Apr-13-2026", "Total Man Hrs for Day", y=800.0)
+
+    # Task Name line
+    task_line = _ln("Task Name: Mowing Foreman: Bob", y=700.0)
+
+    lines: list[list[tuple[float, float, str]]] = [customer_line, day_line, task_line]
+
+    # First element of note_lines is the "Notes:" row itself (may include
+    # text after the label, or just "Notes:" with nothing).
+    if note_lines:
+        lines.append(_ln(note_lines[0], y=600.0))
+        for i, cont in enumerate(note_lines[1:], start=1):
+            lines.append(_ln(cont, y=float(600 - i * 20)))
+
+    for i, extra in enumerate(after_notes or []):
+        lines.append(_ln(extra, y=float(400 - i * 20)))
+
+    # Wrap in the required pages > lines > tokens structure.
+    return [lines]
+
+
+def _first_task(note_lines: list[str], after_notes: list[str] | None = None):
+    """Parse synthetic page data and return the first (and only) task."""
+    pages = _make_task_pages(note_lines, after_notes)
+    report = _walk(pages)
+    assert report.tasks, "Expected at least one task from synthetic page data"
+    return report.tasks[0]
+
+
+class TestInNotesFlag:
+    """Unit tests for the in_notes state introduced in this PR."""
+
+    def test_single_line_note_captured(self):
+        """A 'Notes:' line with inline text sets the task's notes field."""
+        task = _first_task(["Notes: Trimmed hedges along fence"])
+        assert task.notes == "Trimmed hedges along fence"
+
+    def test_continuation_line_appended_with_newline(self):
+        """A row following 'Notes:' is appended to notes with a newline separator."""
+        task = _first_task([
+            "Notes: First line of notes",
+            "Second line continuation",
+        ])
+        assert task.notes == "First line of notes\nSecond line continuation"
+
+    def test_multiple_continuation_lines_all_captured(self):
+        """All continuation rows are accumulated in order."""
+        task = _first_task([
+            "Notes: Line one",
+            "Line two",
+            "Line three",
+        ])
+        assert task.notes == "Line one\nLine two\nLine three"
+
+    def test_empty_continuation_line_is_skipped(self):
+        """A blank continuation row is not appended (no spurious newlines)."""
+        # Simulate an empty text element by using a string that is whitespace only;
+        # _line_text strips the result, so the continuation handler sees "".
+        task = _first_task([
+            "Notes: Initial note",
+            "   ",   # whitespace-only row — should be ignored
+            "Real continuation",
+        ])
+        # The blank row must NOT produce an extra newline.
+        assert task.notes == "Initial note\nReal continuation"
+        assert "\n\n" not in task.notes
+
+    def test_notes_label_only_no_inline_text_then_continuation(self):
+        """'Notes:' with no trailing text followed by continuation row.
+
+        When the 'Notes:' label has no inline text the initial notes value is
+        empty ("").  The continuation block must use the continuation text as
+        the first content rather than prepending a spurious newline.
+        """
+        task = _first_task([
+            "Notes:",          # nothing after the label
+            "Continuation text",
+        ])
+        assert task.notes == "Continuation text"
+        assert not task.notes.startswith("\n")
+
+    def test_services_header_stops_notes_accumulation(self):
+        """Encountering a Services/Activities table header resets in_notes.
+
+        Any row that arrives after the services header must NOT be appended
+        to notes — instead it should be processed as a service row.
+        """
+        task = _first_task(
+            ["Notes: Some crew note"],
+            after_notes=["Services/Activities Total Price", "Not a note"],
+        )
+        # The "Not a note" row comes after the services header, so it must NOT
+        # appear in notes.
+        assert "Not a note" not in task.notes
+        assert task.notes == "Some crew note"
+
+    def test_rates_header_stops_notes_accumulation(self):
+        """Encountering a Rates table header resets in_notes."""
+        task = _first_task(
+            ["Notes: Initial note"],
+            after_notes=["Rates Total Price", "Should not be in notes"],
+        )
+        assert "Should not be in notes" not in task.notes
+        assert task.notes == "Initial note"
+
+    def test_notes_not_carried_into_next_task(self):
+        """close_task() resets in_notes so continuation rows never bleed into
+        a subsequent task."""
+        # Build two tasks on the same page.  The second task starts with a
+        # new "Task Name:" line.  Any rows between that line and the next
+        # "Notes:" must not be attributed to the first task's notes.
+        customer_line = _ln("Acme Corp", "9999001A", y=900.0)
+        day_line = _ln("Mon-Apr-13-2026", "Total Man Hrs for Day", y=800.0)
+
+        task1_line = _ln("Task Name: Task One Foreman: Alice", y=700.0)
+        notes1_line = _ln("Notes: Task one note", y=660.0)
+        cont1_line = _ln("Continuation of task one", y=640.0)
+
+        task2_line = _ln("Task Name: Task Two Foreman: Bob", y=600.0)
+        # No Notes: line for task two.
+        unrelated_line = _ln("Should not appear in task one notes", y=560.0)
+
+        page = [
+            customer_line,
+            day_line,
+            task1_line,
+            notes1_line,
+            cont1_line,
+            task2_line,
+            unrelated_line,
+        ]
+        report = _walk([page])
+        assert len(report.tasks) == 2
+
+        task1 = next(t for t in report.tasks if t.task_name == "Task One")
+        task2 = next(t for t in report.tasks if t.task_name == "Task Two")
+
+        assert "Continuation of task one" in task1.notes
+        assert "Should not appear in task one notes" not in task1.notes
+        assert task2.notes == ""
+
+    def test_new_day_header_resets_notes_state(self):
+        """A day-header line for a new date triggers close_task, resetting in_notes."""
+        customer_line = _ln("Acme Corp", "9999001A", y=900.0)
+        day1_line = _ln("Mon-Apr-13-2026", "Total Man Hrs for Day", y=800.0)
+        task1_line = _ln("Task Name: Monday Task Foreman: Alice", y=700.0)
+        notes1_line = _ln("Notes: Monday note", y=660.0)
+
+        # A new day header — must close the current task (resetting in_notes).
+        day2_line = _ln("Tue-Apr-14-2026", "Total Man Hrs for Day", y=600.0)
+        # This line appears AFTER the day change.  Since in_notes was reset by
+        # close_task(), it should NOT be treated as a note continuation.
+        stray_line = _ln("Task Name: Tuesday Task Foreman: Bob", y=560.0)
+
+        page = [
+            customer_line,
+            day1_line,
+            task1_line,
+            notes1_line,
+            day2_line,
+            stray_line,
+        ]
+        report = _walk([page])
+        assert len(report.tasks) == 2
+
+        mon_task = next(t for t in report.tasks if t.date == "Mon-Apr-13-2026")
+        assert mon_task.notes == "Monday note"
+
+        tue_task = next(t for t in report.tasks if t.date == "Tue-Apr-14-2026")
+        # "Tuesday Task" comes after the new day header and is a Task Name line,
+        # not a note continuation.
+        assert tue_task.notes == ""
+
+    def test_inline_text_and_continuation_combined(self):
+        """Inline 'Notes:' text plus continuation rows are all joined correctly."""
+        task = _first_task([
+            "Notes: Inline part one",
+            "Continuation part two",
+            "Continuation part three",
+        ])
+        parts = task.notes.split("\n")
+        assert parts == ["Inline part one", "Continuation part two", "Continuation part three"]
