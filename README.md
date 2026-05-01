@@ -73,6 +73,12 @@ to the T-Town group.
    that need a price.
 4. Click "Create Draft Invoices in QuickBooks".
 
+Temporary backup pricing: on the upload page, check **Use hardcoded 2026 price
+list** to override matching labor, service, material, and equipment prices from
+`config/Master Price List - 2026.xlsx`. Items with no workbook match keep their
+LMN PDF price; if that price is still `$0`, they continue to appear in the
+zero-price modal.
+
 The app rejects exact duplicate PDF files and overlapping parsed tasks across
 different PDFs before building invoices, preventing the same visit from being
 counted twice in a multi-PDF batch.
@@ -155,11 +161,13 @@ src/
 ├── invoice/line_items.py     # Aggregated invoice building
 ├── qbo/                      # QuickBooks Online API integration
 ├── lmn/                      # LMN API (customer mapping)
+├── pricing/                  # Temporary hardcoded Excel price-list lookup
 ├── mapping/                  # JobsiteID -> QBO CustomerID
 └── db/                       # Invoice history, overrides, LMN credentials
 app.py                        # Flask web application
 config/
 ├── customer_mapping.csv      # Manual jobsite mapping overrides
+├── Master Price List - 2026.xlsx # Temporary backup price list
 └── included_items.txt        # Bundled-item allow-list ($0 auto-drop)
 ```
 

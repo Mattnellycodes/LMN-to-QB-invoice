@@ -23,7 +23,14 @@
 
     <div class="file-list" id="file-list" style="display: none;"></div>
 
-    <div class="mt-20">
+    <div class="upload-actions mt-20">
+        <label class="hardcoded-price-toggle">
+            <input type="checkbox" name="use_hardcoded_prices" value="1">
+            <span>
+                <strong>Use hardcoded 2026 price list</strong>
+                <small>Overrides uploaded PDF prices when a workbook match exists.</small>
+            </span>
+        </label>
         <button type="submit" class="btn btn-success" id="submit-btn" disabled>Process PDFs</button>
     </div>
 </form>

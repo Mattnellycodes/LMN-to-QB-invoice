@@ -100,7 +100,11 @@ def check_for_duplicates(invoices: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     return duplicates
 
 
-def process_uploaded_pdf(filename: str, content: BytesIO) -> Dict[str, Any]:
+def process_uploaded_pdf(
+    filename: str,
+    content: BytesIO,
+    use_hardcoded_prices: bool = False,
+) -> Dict[str, Any]:
     """Parse an LMN Job History PDF and build invoices ready for the UI.
 
     Returns a session-shaped dict with `invoices`, `unmapped_jobsites`,
@@ -109,11 +113,15 @@ def process_uploaded_pdf(filename: str, content: BytesIO) -> Dict[str, Any]:
     """
     content.seek(0)
     return process_uploaded_pdfs(
-        [UploadedPdf(filename=filename, content=content.read())]
+        [UploadedPdf(filename=filename, content=content.read())],
+        use_hardcoded_prices=use_hardcoded_prices,
     )
 
 
-def process_uploaded_pdfs(files: list[UploadedPdf]) -> Dict[str, Any]:
+def process_uploaded_pdfs(
+    files: list[UploadedPdf],
+    use_hardcoded_prices: bool = False,
+) -> Dict[str, Any]:
     """Parse one or more LMN Job History PDFs as a single billing batch."""
     if not files:
         raise ProcessingError("Please upload at least one PDF.")
@@ -173,6 +181,13 @@ def process_uploaded_pdfs(files: list[UploadedPdf]) -> Dict[str, Any]:
         total_size,
         len(combined.tasks),
     )
+    if use_hardcoded_prices:
+        return _process_parsed_report(
+            combined,
+            upload_label,
+            t0,
+            use_hardcoded_prices=True,
+        )
     return _process_parsed_report(combined, upload_label, t0)
 
 
@@ -212,7 +227,10 @@ def _reject_overlapping_tasks(parsed_reports: list[tuple[str, ParsedReport]]) ->
 
 
 def _process_parsed_report(
-    report: ParsedReport, upload_label: str, t0: float | None = None
+    report: ParsedReport,
+    upload_label: str,
+    t0: float | None = None,
+    use_hardcoded_prices: bool = False,
 ) -> Dict[str, Any]:
     """Build invoices and UI state from a parsed single- or multi-PDF report."""
     if t0 is None:
@@ -235,9 +253,24 @@ def _process_parsed_report(
     )
     shop_missing = SHOP_JOBSITE_ID not in report.customers or not allocation.shop_pool
     included = load_included_items()
+    hardcoded_prices = None
+    hardcoded_price_count = 0
+    if use_hardcoded_prices:
+        try:
+            from src.pricing.hardcoded_price_list import load_price_lookup
+
+            hardcoded_prices = load_price_lookup()
+            hardcoded_price_count = len(hardcoded_prices)
+        except Exception as e:
+            logger.exception("Hardcoded price list could not be loaded")
+            raise ProcessingError(f"Hardcoded price list could not be loaded: {e}")
+
     invoice_date = datetime.now().strftime("%Y-%m-%d")
     invoices = build_all_invoices(
-        allocation.rollups.values(), included=included, invoice_date=invoice_date
+        allocation.rollups.values(),
+        included=included,
+        invoice_date=invoice_date,
+        hardcoded_prices=hardcoded_prices,
     )
 
     zero_price_items: list[dict] = []
@@ -246,7 +279,11 @@ def _process_parsed_report(
             rollup = allocation.rollups.get(src.jobsite_id)
             if rollup is None:
                 continue
-            for item in extract_zero_price_items(rollup.services, included):
+            for item in extract_zero_price_items(
+                rollup.services,
+                included,
+                hardcoded_prices=hardcoded_prices,
+            ):
                 item["jobsite_id"] = src.jobsite_id
                 item["jobsite_name"] = rollup.customer_name
                 item["customer_name"] = invoice.customer_name
@@ -318,6 +355,8 @@ def _process_parsed_report(
         "fallback_lookup_names": fallback_lookup_names,
         "fallback_error": fallback_error,
         "shop_missing": shop_missing,
+        "hardcoded_prices_applied": bool(use_hardcoded_prices),
+        "hardcoded_price_count": hardcoded_price_count,
         "summary": {
             "total_jobsites": len(invoices),
             "mapped_jobsites": mapped_count,
@@ -325,6 +364,7 @@ def _process_parsed_report(
             "duplicates_found": len(duplicates),
             "total_line_items": sum(len(inv["line_items"]) for inv in all_invoices),
             "fallback_items": len(fallback_lookup_names),
+            "hardcoded_prices_applied": bool(use_hardcoded_prices),
         },
     }
 

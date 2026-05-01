@@ -70,6 +70,8 @@ Use type hints for function signatures
 Dependencies
 
 pypdfium2 - PDF text extraction (positional) for the LMN Job History report
+pandas - temporary hardcoded Excel price-list loading
+openpyxl - Excel engine used by pandas for .xlsx files
 intuit-oauth - QBO API OAuth2 authentication
 requests - HTTP requests for API calls
 flask - Web application framework
@@ -95,6 +97,7 @@ src/
     invoice/line_items.py     # Aggregated invoice building with dedupe + included filter
     qbo/                      # QuickBooks Online API integration
     lmn/                      # LMN API (auth + customer mapping)
+    pricing/                  # Temporary hardcoded Excel price-list lookup
     mapping/customer_mapping.py # Customer matching (JobsiteID -> QBO CustomerID)
     mapping/item_mapping.py   # QBO item/service name mapping
     db/                       # Invoice history, customer overrides, item overrides, LMN credentials
@@ -104,6 +107,7 @@ src/
 app.py                        # Flask web application
 config/
     customer_mapping.csv      # JobsiteID -> QBO customer mapping
+    Master Price List - 2026.xlsx # Temporary hardcoded backup price list
     included_items.txt        # Exact-match allow-list for $0 bundled services
 templates/
     base.html                 # Base template with styling

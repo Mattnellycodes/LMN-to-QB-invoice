@@ -83,6 +83,14 @@
 </div>
 {% endif %}
 
+{% if result.hardcoded_prices_applied %}
+<div class="flash error">
+    <strong>Hardcoded 2026 price list applied.</strong>
+    Workbook prices were used for matching labor, service, material, and equipment lines.
+    Lines without a workbook match kept the LMN PDF price.
+</div>
+{% endif %}
+
 {% if result.fallback_error %}
 <div class="flash error">
     <strong>Can't create invoices:</strong> {{ result.fallback_error }}

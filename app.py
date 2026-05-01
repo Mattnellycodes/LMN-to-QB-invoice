@@ -395,17 +395,23 @@ def upload_post():
             UploadedPdf(filename=pdf_file.filename, content=pdf_file.read())
             for pdf_file in pdf_files
         ]
-        result = process_uploaded_pdfs(uploads)
+        use_hardcoded_prices = request.form.get("use_hardcoded_prices") == "1"
+        result = process_uploaded_pdfs(
+            uploads,
+            use_hardcoded_prices=use_hardcoded_prices,
+        )
 
         _clear_processing_result()
         _set_processing_result(result)
 
         logger.info(
-            "POST /upload committed: files=%d invoices=%d unmapped=%d zero_price=%d",
+            "POST /upload committed: files=%d invoices=%d unmapped=%d "
+            "zero_price=%d hardcoded_prices=%s",
             len(uploads),
             len(result.get("invoices", [])),
             len(result.get("unmapped_jobsites", [])),
             len(result.get("zero_price_items", [])),
+            result.get("hardcoded_prices_applied", False),
         )
 
         if result.get("unmapped_jobsites"):
@@ -684,6 +690,8 @@ def results():
         "fallback_lookup_names": result.get("fallback_lookup_names", []),
         "fallback_error": result.get("fallback_error"),
         "shop_missing": result.get("shop_missing", False),
+        "hardcoded_prices_applied": result.get("hardcoded_prices_applied", False),
+        "hardcoded_price_count": result.get("hardcoded_price_count", 0),
         "summary": {
             "total_jobsites": len(all_invoices),
             "mapped_jobsites": len(mapped_invoices),

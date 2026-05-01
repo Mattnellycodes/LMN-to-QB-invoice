@@ -14,6 +14,7 @@ from src.invoice.line_items import (
     load_included_items,
     strip_unit_marker,
 )
+from src.pricing.hardcoded_price_list import HardcodedPriceLookup, PriceEntry
 
 
 INCLUDED = frozenset(["GRUB-SPRING(VT)", "General Garden Maintenance(VT)", "Small Project"])
@@ -68,6 +69,63 @@ def test_services_dedupe_by_description():
     delivery = next(i for i in items if i.description == "Delivery, Bozeman")
     assert delivery.quantity == pytest.approx(2.0)
     assert delivery.amount == pytest.approx(170.0)
+
+
+def test_hardcoded_price_overrides_service_rate_and_amount():
+    services = [_svc("Dump fee, ea [ea]", qty=2, total=1, rate=0.5)]
+    prices = HardcodedPriceLookup({
+        "Dump fee, ea [ea]": PriceEntry("Dump Fee Bozeman, ea", 25.0),
+    })
+
+    items = extract_service_line_items(services, INCLUDED, hardcoded_prices=prices)
+
+    assert len(items) == 1
+    assert items[0].description == "Dump fee, ea [ea]"
+    assert items[0].quantity == 2.0
+    assert items[0].rate == 25.0
+    assert items[0].amount == 50.0
+    assert items[0].item_lookup_name == "Dump Fee Bozeman, ea"
+
+
+def test_hardcoded_price_turns_zero_price_service_into_billable_line():
+    services = [_svc("Fertilizer [Bags]", qty=3, total=0, rate=0)]
+    prices = HardcodedPriceLookup({
+        "Fertilizer [Bags]": PriceEntry("Fertilizer, Bagged, ea", 9.95),
+    })
+
+    items = extract_service_line_items(services, INCLUDED, hardcoded_prices=prices)
+
+    assert len(items) == 1
+    assert items[0].amount == pytest.approx(29.85)
+    assert extract_zero_price_items(services, INCLUDED, hardcoded_prices=prices) == []
+
+
+def test_hardcoded_price_missing_falls_back_to_zero_price_modal():
+    services = [_svc("Unknown Material", qty=1, total=0, rate=0)]
+    prices = HardcodedPriceLookup({})
+
+    assert extract_service_line_items(
+        services, INCLUDED, hardcoded_prices=prices
+    ) == []
+    zero = extract_zero_price_items(services, INCLUDED, hardcoded_prices=prices)
+    assert len(zero) == 1
+    assert zero[0]["description"] == "Unknown Material"
+
+
+def test_hardcoded_price_min_quantity_applies():
+    services = [_svc("Hedge Shearing [Day]", qty=0.25, total=20, rate=80)]
+    prices = HardcodedPriceLookup({
+        "Hedge Shearing [Day]": PriceEntry(
+            "Hedge Shearing, hr",
+            100.0,
+            min_quantity=1.0,
+        ),
+    })
+
+    items = extract_service_line_items(services, INCLUDED, hardcoded_prices=prices)
+
+    assert items[0].quantity == 1.0
+    assert items[0].amount == 100.0
 
 
 def test_similarly_named_billable_item_is_not_skipped():
@@ -206,6 +264,34 @@ def test_labor_line_uses_rate_name_as_lookup_description_preserved():
     assert labor.description == "Skilled Garden Hourly Labor 4/13"
     # QBO lookup key is the raw LMN rate name.
     assert labor.item_lookup_name == "Maintenance Skilled Hourly Labor - TOWN"
+
+
+def test_hardcoded_price_overrides_labor_rate():
+    rollup = JobsiteRollup(
+        jobsite_id="ABC",
+        customer_name="Customer A",
+        hourly_rate=75.0,
+        hourly_rate_name="Maintenance Skilled Hourly Labor - TOWN",
+    )
+    rollup.work_by_date_foreman[("Mon-Apr-13-2026", "Jenna")] = 2.0
+    prices = HardcodedPriceLookup({
+        "Maintenance Skilled Hourly Labor - TOWN": PriceEntry(
+            "Maintenance Hourly Labor - TOWN",
+            95.0,
+        ),
+    })
+
+    inv = build_invoice(
+        rollup,
+        INCLUDED,
+        invoice_date="2026-04-19",
+        hardcoded_prices=prices,
+    )
+    labor = inv.line_items[0]
+
+    assert labor.rate == 95.0
+    assert labor.amount == 190.0
+    assert labor.item_lookup_name == "Maintenance Hourly Labor - TOWN"
 
 
 def test_labor_line_amount_matches_rounded_qty_times_rate():

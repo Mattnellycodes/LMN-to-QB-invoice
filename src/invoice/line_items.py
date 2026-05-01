@@ -19,7 +19,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Any, Iterable, Optional
 
 from src.calculations.allocation import JobsiteRollup
 from src.parsing.pdf_parser import parse_money, parse_qty
@@ -157,21 +157,26 @@ def calculate_direct_payment_fee(subtotal: float) -> float:
     return 20.00
 
 
-def format_labor_description(dates: list[str]) -> str:
+MAINTENANCE_LABOR_DESCRIPTION = "Skilled Garden Hourly Labor"
+IRRIGATION_LABOR_DESCRIPTION = "Irrigation Technician Hourly Labor"
+
+
+def format_labor_description(dates: list[str], is_irrigation: bool = False) -> str:
     """Build a human-readable labor line description from LMN date strings.
 
-    LMN date format: "Mon-Apr-13-2026". Output: "Skilled Garden Hourly Labor 4/13"
-    or "... 4/13-4/15" for ranges.
+    LMN date format: "Mon-Apr-13-2026". Output lists each visit, comma-
+    separated, in parens — e.g. "Skilled Garden Hourly Labor (4/13, 4/15)".
+    Irrigation rollups switch the base text to "Irrigation Technician Hourly
+    Labor".
     """
+    base = IRRIGATION_LABOR_DESCRIPTION if is_irrigation else MAINTENANCE_LABOR_DESCRIPTION
     if not dates:
-        return "Skilled Garden Hourly Labor"
+        return base
     shorts = [_short_date(d) for d in dates]
     shorts = [s for s in shorts if s]
     if not shorts:
-        return "Skilled Garden Hourly Labor"
-    if len(shorts) == 1:
-        return f"Skilled Garden Hourly Labor {shorts[0]}"
-    return f"Skilled Garden Hourly Labor {shorts[0]}-{shorts[-1]}"
+        return base
+    return f"{base} ({', '.join(shorts)})"
 
 
 def _short_date(lmn_date: str) -> str:
@@ -210,6 +215,7 @@ def extract_service_line_items(
     services: Iterable[dict],
     included: frozenset[str],
     class_name: str = MAINTENANCE_CLASS_NAME,
+    hardcoded_prices: Any | None = None,
 ) -> list[LineItem]:
     """Dedupe billable services by description; sum quantities and totals."""
     aggregated: "OrderedDict[str, LineItem]" = OrderedDict()
@@ -218,11 +224,25 @@ def extract_service_line_items(
         if not desc:
             continue
         total = parse_money(svc.get("total_price", ""))
-        if _classify_service(desc, total, included) != "billable":
+        classification = _classify_service(desc, total, included)
+        if classification == "included":
             continue
 
         qty = parse_qty(svc.get("inv_qty", "")) or parse_qty(svc.get("act_qty", ""))
         rate = parse_money(svc.get("rate", ""))
+        item_lookup_name = strip_unit_marker(desc)
+        price_entry = hardcoded_prices.resolve(desc) if hardcoded_prices else None
+
+        if price_entry is not None:
+            if price_entry.min_quantity is not None:
+                qty = max(qty, price_entry.min_quantity)
+            if qty <= 0:
+                continue
+            rate = price_entry.price
+            total = round(qty * rate, 2)
+            item_lookup_name = price_entry.lookup_name
+        elif classification != "billable":
+            continue
 
         existing = aggregated.get(desc)
         if existing is None:
@@ -231,7 +251,7 @@ def extract_service_line_items(
                 quantity=qty,
                 rate=rate,
                 amount=round(total, 2),
-                item_lookup_name=strip_unit_marker(desc),
+                item_lookup_name=item_lookup_name,
                 class_name=class_name,
             )
         else:
@@ -249,7 +269,9 @@ def extract_service_line_items(
 
 
 def extract_zero_price_items(
-    services: Iterable[dict], included: frozenset[str]
+    services: Iterable[dict],
+    included: frozenset[str],
+    hardcoded_prices: Any | None = None,
 ) -> list[dict]:
     """Return service rows with Total Price = $0 whose name is NOT on the allow-list.
 
@@ -262,6 +284,8 @@ def extract_zero_price_items(
         if not desc:
             continue
         total = parse_money(svc.get("total_price", ""))
+        if hardcoded_prices and hardcoded_prices.resolve(desc) is not None:
+            continue
         if _classify_service(desc, total, included) != "zero_price":
             continue
 
@@ -298,6 +322,7 @@ def _build_rollup_lines(
     rollup: JobsiteRollup,
     included: frozenset[str],
     class_name: str,
+    hardcoded_prices: Any | None = None,
 ) -> list[LineItem]:
     """Labor + materials for one rollup, tagged with the given QBO class.
 
@@ -308,6 +333,12 @@ def _build_rollup_lines(
 
     total_hours = rollup.total_billable_hours
     rate = rollup.hourly_rate
+    item_lookup_name = rollup.hourly_rate_name
+    if hardcoded_prices and rollup.hourly_rate_name:
+        price_entry = hardcoded_prices.resolve(rollup.hourly_rate_name)
+        if price_entry is not None:
+            rate = price_entry.price
+            item_lookup_name = price_entry.lookup_name
     if total_hours > 0 and rate > 0:
         # Derive Amount from the rounded Qty so QBO's Amount == UnitPrice*Qty
         # validation passes. Computing Amount from the raw hours while sending
@@ -319,12 +350,16 @@ def _build_rollup_lines(
                 quantity=qty,
                 rate=rate,
                 amount=round(qty * rate, 2),
-                item_lookup_name=rollup.hourly_rate_name,
+                item_lookup_name=item_lookup_name,
                 class_name=class_name,
             )
         )
 
-    lines.extend(extract_service_line_items(rollup.services, included, class_name))
+    lines.extend(
+        extract_service_line_items(
+            rollup.services, included, class_name, hardcoded_prices
+        )
+    )
     return lines
 
 
@@ -356,6 +391,7 @@ def build_invoice_for_group(
     group,
     included: frozenset[str],
     invoice_date: Optional[str] = None,
+    hardcoded_prices: Any | None = None,
 ) -> InvoiceData:
     """Build an InvoiceData for one RollupGroup (maintenance, irrigation, or both).
 
@@ -400,12 +436,16 @@ def build_invoice_for_group(
 
     if maint is not None:
         invoice.line_items.extend(
-            _build_rollup_lines(maint, included, MAINTENANCE_CLASS_NAME)
+            _build_rollup_lines(
+                maint, included, MAINTENANCE_CLASS_NAME, hardcoded_prices
+            )
         )
         invoice.sources.extend(_emit_sources(maint, MAINTENANCE_CLASS_NAME))
     if irr is not None:
         invoice.line_items.extend(
-            _build_rollup_lines(irr, included, IRRIGATION_CLASS_NAME)
+            _build_rollup_lines(
+                irr, included, IRRIGATION_CLASS_NAME, hardcoded_prices
+            )
         )
         invoice.sources.extend(_emit_sources(irr, IRRIGATION_CLASS_NAME))
 
@@ -417,6 +457,7 @@ def build_invoice(
     rollup: JobsiteRollup,
     included: frozenset[str],
     invoice_date: Optional[str] = None,
+    hardcoded_prices: Any | None = None,
 ) -> InvoiceData:
     """Build an InvoiceData from a single rollup (backward-compat convenience).
 
@@ -429,13 +470,14 @@ def build_invoice(
         group = RollupGroup(maintenance=None, irrigation=rollup)
     else:
         group = RollupGroup(maintenance=rollup, irrigation=None)
-    return build_invoice_for_group(group, included, invoice_date)
+    return build_invoice_for_group(group, included, invoice_date, hardcoded_prices)
 
 
 def build_all_invoices(
     rollups: Iterable[JobsiteRollup],
     included: Optional[frozenset[str]] = None,
     invoice_date: Optional[str] = None,
+    hardcoded_prices: Any | None = None,
 ) -> list[InvoiceData]:
     """Build invoices for every rollup, merging Irr jobs onto their maintenance twin.
 
@@ -462,7 +504,7 @@ def build_all_invoices(
     merged_count = 0
     standalone_irr_count = 0
     for group in groups:
-        invoice = build_invoice_for_group(group, included, invoice_date)
+        invoice = build_invoice_for_group(group, included, invoice_date, hardcoded_prices)
         if invoice.subtotal <= 0:
             skipped += 1
             continue
