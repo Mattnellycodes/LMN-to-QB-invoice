@@ -728,6 +728,10 @@ tr:hover td {
     margin-right: 8px;
 }
 
+.invoice-crew-notes-text {
+    white-space: pre-wrap;
+}
+
 .zero-price-inputs {
     display: grid;
     grid-template-columns: 2fr 1fr 1fr;

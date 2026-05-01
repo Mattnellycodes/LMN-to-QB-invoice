@@ -190,14 +190,16 @@ def _walk(pages: list[list[list[tuple[float, float, str]]]]) -> ParsedReport:
     current_task: Task | None = None
     in_services_table = False
     in_rates_table = False
+    in_notes = False
 
     def close_task() -> None:
-        nonlocal current_task, in_services_table, in_rates_table
+        nonlocal current_task, in_services_table, in_rates_table, in_notes
         if current_task is not None:
             tasks.append(current_task)
         current_task = None
         in_services_table = False
         in_rates_table = False
+        in_notes = False
 
     total_pages = len(pages)
     for page_idx, lines in enumerate(pages):
@@ -315,15 +317,18 @@ def _walk(pages: list[list[list[tuple[float, float, str]]]]) -> ParsedReport:
 
             if s.startswith("Notes:"):
                 current_task.notes = s[len("Notes:"):].strip()
+                in_notes = True
                 continue
 
             if s.startswith("Services/Activities") and "Total Price" in s:
                 in_services_table = True
                 in_rates_table = False
+                in_notes = False
                 continue
             if s.startswith("Rates") and "Total Price" in s:
                 in_rates_table = True
                 in_services_table = False
+                in_notes = False
                 continue
 
             if in_services_table:
@@ -375,6 +380,16 @@ def _walk(pages: list[list[list[tuple[float, float, str]]]]) -> ParsedReport:
                         current_task.task_name,
                         current_task.jobsite_id,
                         " | ".join(parts),
+                    )
+                continue
+
+            if in_notes:
+                continuation = s.strip()
+                if continuation:
+                    current_task.notes = (
+                        f"{current_task.notes}\n{continuation}"
+                        if current_task.notes
+                        else continuation
                     )
                 continue
 
