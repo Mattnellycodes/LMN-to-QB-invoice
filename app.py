@@ -1343,6 +1343,84 @@ def admin_cleanup_results():
 
 
 # =============================================================================
+# Admin: clear invoice_history (for use after a manual QBO wipe)
+# =============================================================================
+
+
+def _invoice_history_count() -> int:
+    from src.db.connection import db_cursor
+
+    with db_cursor() as cursor:
+        cursor.execute("SELECT COUNT(*) FROM invoice_history")
+        row = cursor.fetchone()
+        return int(row[0]) if row else 0
+
+
+@app.route("/admin/clear-invoice-history")
+@require_qbo_auth
+def admin_clear_history_preview():
+    """Confirm-page for wiping invoice_history.
+
+    The idempotency check at /create-invoices treats any matching row in
+    invoice_history as a "skip" — so stale rows (pointing at QBO invoices
+    that have since been deleted) cause silent skip-creates on the next run.
+    Clearing the table after a manual QBO wipe restores a clean slate.
+    """
+    try:
+        count = _invoice_history_count()
+    except Exception as e:
+        logger.exception("Failed to count invoice_history rows")
+        flash(f"Could not read invoice_history: {e}", "error")
+        return redirect(url_for("index"))
+
+    confirm_token = secrets.token_urlsafe(16)
+    session["clear_history_confirm_token"] = confirm_token
+
+    return render_template(
+        "clear_invoice_history.html",
+        row_count=count,
+        confirm_token=confirm_token,
+        executed=False,
+        deleted=0,
+    )
+
+
+@app.route("/admin/clear-invoice-history", methods=["POST"])
+@require_qbo_auth
+def admin_clear_history_execute():
+    """Truncate invoice_history after a confirmation token check."""
+    from src.db.connection import db_cursor
+
+    submitted_token = request.form.get("confirm_token")
+    expected_token = session.pop("clear_history_confirm_token", None)
+    if not submitted_token or submitted_token != expected_token:
+        flash(
+            "Confirmation expired or invalid — re-open the preview.",
+            "error",
+        )
+        return redirect(url_for("admin_clear_history_preview"))
+
+    try:
+        with db_cursor() as cursor:
+            cursor.execute("DELETE FROM invoice_history")
+            deleted = int(cursor.rowcount or 0)
+    except Exception as e:
+        logger.exception("Failed to clear invoice_history")
+        flash(f"Failed to clear invoice_history: {e}", "error")
+        return redirect(url_for("admin_clear_history_preview"))
+
+    logger.warning("invoice_history cleared via /admin: deleted=%d rows", deleted)
+
+    return render_template(
+        "clear_invoice_history.html",
+        row_count=0,
+        confirm_token=None,
+        executed=True,
+        deleted=deleted,
+    )
+
+
+# =============================================================================
 # Run Server
 # =============================================================================
 

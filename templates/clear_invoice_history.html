@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% block title %}Clear invoice_history{% endblock %}
+
+{% block content %}
+<h1>Clear <code>invoice_history</code> table</h1>
+
+{% if executed %}
+<div class="flash success">
+    Cleared {{ deleted }} row(s) from <code>invoice_history</code>.
+</div>
+<p class="text-muted mt-20">
+    The next <code>/create-invoices</code> run will not skip any jobsite as
+    "already invoiced" — every billable jobsite will create a fresh QBO draft.
+</p>
+<div class="home-actions mt-20">
+    <a href="{{ url_for('index') }}" class="btn btn-secondary">Back to home</a>
+    <a href="{{ url_for('upload') }}" class="btn">Upload again</a>
+</div>
+
+{% else %}
+<p class="text-muted">
+    The <code>invoice_history</code> table currently has
+    <strong>{{ row_count }}</strong> row(s). The idempotency check at
+    <code>/create-invoices</code> treats any matching row as a "skip" — so if
+    you've manually wiped invoices in QuickBooks but the rows here still point
+    at those (now-deleted) invoice IDs, the next upload will silently skip
+    creating them. Clear the table to restore a clean slate.
+</p>
+
+<p class="text-muted mt-20">
+    <strong>This deletes every row in <code>invoice_history</code></strong>.
+    Future duplicate-detection on overlapping (date, foreman) work loses its
+    history. Use only after a manual QBO wipe.
+</p>
+
+<form method="POST" action="{{ url_for('admin_clear_history_execute') }}" class="mt-20"
+      onsubmit="return confirm('Delete all {{ row_count }} row(s) from invoice_history? This cannot be undone.');">
+    <input type="hidden" name="confirm_token" value="{{ confirm_token }}">
+    <button type="submit" class="btn" {% if row_count == 0 %}disabled{% endif %}>
+        Clear all {{ row_count }} row(s)
+    </button>
+    <a href="{{ url_for('index') }}" class="btn btn-secondary">Cancel</a>
+</form>
+{% endif %}
+{% endblock %}
