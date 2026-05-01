@@ -35,7 +35,19 @@
     const fileInput = document.getElementById('pdf_file');
     const fileList = document.getElementById('file-list');
     const submitBtn = document.getElementById('submit-btn');
+    const uploadForm = document.getElementById('upload-form');
     let selectedFiles = [];
+    let submitting = false;
+
+    uploadForm.addEventListener('submit', (e) => {
+        if (submitting || submitBtn.disabled) {
+            e.preventDefault();
+            return;
+        }
+        submitting = true;
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Processing…';
+    });
 
     dropZone.addEventListener('dragover', (e) => {
         e.preventDefault();
