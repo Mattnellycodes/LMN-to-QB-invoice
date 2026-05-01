@@ -26,7 +26,7 @@ DAY_HEADER_RE = re.compile(
     r"^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)-"
     r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{1,2}-\d{4}$"
 )
-JOBSITE_ID_RE = re.compile(r"^\d{7}[A-Z]$")
+JOBSITE_ID_RE = re.compile(r"^\d{5,8}[A-Z]$")
 DATE_RANGE_LINE_RE = re.compile(
     r"^[A-Z][a-z]{2}-\d{1,2}-\d{4} to [A-Z][a-z]{2}-\d{1,2}-\d{4}"
 )

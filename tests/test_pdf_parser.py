@@ -362,3 +362,47 @@ class TestInNotesFlag:
         ])
         parts = task.notes.split("\n")
         assert parts == ["Inline part one", "Continuation part two", "Continuation part three"]
+
+
+class TestJobsiteIdLengths:
+    """Customer-header detection must accept 6- and 7-digit LMN jobsite IDs.
+
+    Regression for the April 2026 incident where `*Maintenance Sample- Land`
+    (jobsite `665522W`, 6 digits) was not recognized as a customer header,
+    causing its tasks to be silently attributed to the previous customer
+    (Dowling, Margaret).
+    """
+
+    def _two_customer_pages(self, second_jobsite_id: str) -> list:
+        first_header = _ln("First Customer", "9999001A", y=900.0)
+        first_day = _ln("Mon-Apr-6-2026", "Total Man Hrs for Day", y=860.0)
+        first_task = _ln("Task Name: First Task Foreman: Alice", y=820.0)
+        first_close = _ln("Total Man Hours for Job: 8.00", y=780.0)
+
+        second_header = _ln("Second Customer", second_jobsite_id, y=720.0)
+        second_day = _ln("Tue-Apr-7-2026", "Total Man Hrs for Day", y=680.0)
+        second_task = _ln("Task Name: Second Task Foreman: Bob", y=640.0)
+
+        return [[
+            first_header,
+            first_day,
+            first_task,
+            first_close,
+            second_header,
+            second_day,
+            second_task,
+        ]]
+
+    def test_six_digit_jobsite_id_recognized(self):
+        report = _walk(self._two_customer_pages("665522W"))
+        assert "665522W" in report.customers
+        assert report.customers["665522W"].name == "Second Customer"
+        second = next(t for t in report.tasks if t.task_name == "Second Task")
+        assert second.jobsite_id == "665522W"
+        assert second.customer_name == "Second Customer"
+
+    def test_seven_digit_jobsite_id_still_recognized(self):
+        report = _walk(self._two_customer_pages("5813613W"))
+        assert "5813613W" in report.customers
+        second = next(t for t in report.tasks if t.task_name == "Second Task")
+        assert second.jobsite_id == "5813613W"
