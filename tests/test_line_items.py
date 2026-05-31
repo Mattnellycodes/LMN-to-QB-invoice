@@ -6,6 +6,8 @@ import pytest
 
 from src.calculations.allocation import JobsiteRollup
 from src.invoice.line_items import (
+    InvoiceData,
+    InvoiceSource,
     build_invoice,
     calculate_direct_payment_fee,
     extract_service_line_items,
@@ -87,6 +89,18 @@ def test_hardcoded_price_overrides_service_rate_and_amount():
     assert items[0].item_lookup_name == "Dump Fee Bozeman, ea"
 
 
+def test_deer_spray_display_name_overridden_lookup_preserved():
+    services = [_svc("Deer Spray", qty=1, total=10, rate=10)]
+    prices = HardcodedPriceLookup({
+        "Deer Spray": PriceEntry("Deer Spray, Bozeman, ea", 10.0),
+    })
+
+    items = extract_service_line_items(services, INCLUDED, hardcoded_prices=prices)
+
+    assert items[0].description == "Deer and Rabbit Spray"
+    assert items[0].item_lookup_name == "Deer Spray, Bozeman, ea"
+
+
 def test_hardcoded_price_turns_zero_price_service_into_billable_line():
     services = [_svc("Fertilizer [Bags]", qty=3, total=0, rate=0)]
     prices = HardcodedPriceLookup({
@@ -153,7 +167,7 @@ def test_zero_price_with_zero_quantity_is_ignored():
 
 
 def test_direct_payment_fee_tiers():
-    assert calculate_direct_payment_fee(500) == pytest.approx(50.0)
+    assert calculate_direct_payment_fee(500) == pytest.approx(5.0)
     assert calculate_direct_payment_fee(1000) == 15.0
     assert calculate_direct_payment_fee(1500) == 15.0
     assert calculate_direct_payment_fee(2001) == 20.0

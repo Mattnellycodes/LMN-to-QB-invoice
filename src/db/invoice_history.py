@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 from src.db.connection import db_cursor
+from src.parsing.pdf_parser import lmn_date_sort_key
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +54,7 @@ def record_invoice_creation(
             """,
             (
                 jobsite_id,
-                sorted(set(work_dates)),
+                sorted(set(work_dates), key=lmn_date_sort_key),
                 sorted(set(foremen)),
                 sorted(set(date_foreman_pairs)),
                 qbo_invoice_id,

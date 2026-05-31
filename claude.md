@@ -56,7 +56,7 @@ zero-price modal with its source (date, foreman, notes) for manual review.
 Direct Payment Fee
 Applied to digital invoices based on subtotal:
 
-Under $1,000 → 10% of subtotal
+Under $1,000 → 1% of subtotal
 $1,000–$2,000 → $15 flat
 Over $2,000 → $20 flat
 

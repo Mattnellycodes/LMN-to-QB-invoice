@@ -128,7 +128,7 @@ Billable Hours per Jobsite = sum(CostCode 200 hours) + Allocated Drive Time
 
 | Subtotal | Fee |
 |----------|-----|
-| Under $1,000 | 10% of subtotal |
+| Under $1,000 | 1% of subtotal |
 | $1,000 - $2,000 | $15 flat |
 | Over $2,000 | $20 flat |
 
