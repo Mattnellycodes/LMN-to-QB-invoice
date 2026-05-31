@@ -6,8 +6,11 @@ import pytest
 
 from src.calculations.allocation import JobsiteRollup
 from src.invoice.line_items import (
+    FEE_ITEM_LOOKUP_NAME,
+    MAINTENANCE_LABOR_DESCRIPTION,
     InvoiceData,
     InvoiceSource,
+    _service_sort_priority,
     build_invoice,
     calculate_direct_payment_fee,
     extract_service_line_items,
@@ -448,3 +451,56 @@ def test_build_invoice_labor_description_dates_are_chronological():
 
     labor = inv.line_items[0]
     assert labor.description == "Skilled Garden Hourly Labor (4/27, 5/1)"
+
+
+def test_service_sort_priority_buckets():
+    # Materials / uncategorized
+    assert _service_sort_priority("Annual Flowers") == 2
+    assert _service_sort_priority("Irrigation valve repair part") == 2
+    # Mulch product
+    assert _service_sort_priority("Mulch Installed [Yards]") == 3
+    assert _service_sort_priority("Mulch, Soil Pep, bulk [Yd]") == 3
+    # Mulch extras + delivery
+    assert _service_sort_priority("Load Time for Bulk Mulch") == 4
+    assert _service_sort_priority("Mulch glue") == 4
+    assert _service_sort_priority("Delivery, Bozeman") == 4
+    # Deer spray (matches raw name and the overridden display name)
+    assert _service_sort_priority("Deer Spray") == 5
+    assert _service_sort_priority("Deer and Rabbit Spray") == 5
+    # Dump fee (matches every observed variant)
+    assert _service_sort_priority("Dump fee") == 6
+    assert _service_sort_priority("Dump/Compost") == 6
+
+
+def test_build_invoice_orders_services_into_groups():
+    rollup = JobsiteRollup(
+        jobsite_id="ABC",
+        customer_name="Customer A",
+        hourly_rate=75.0,
+    )
+    rollup.work_by_date_foreman[("Mon-Apr-13-2026", "Jenna")] = 4.0
+    # Deliberately scrambled so a no-op sort would fail the assertion below.
+    rollup.services = [
+        _svc("Dump/Compost", qty=1, total=30, rate=30),
+        _svc("Load Time for Bulk Mulch", qty=1, total=55, rate=55),
+        _svc("Annual Flowers", qty=1, total=20, rate=20),
+        _svc("Deer Spray", qty=1, total=45, rate=45),
+        _svc("Mulch Installed [Yards]", qty=2, total=100, rate=50),
+        _svc("Delivery, Bozeman", qty=1, total=85, rate=85),
+    ]
+
+    inv = build_invoice(rollup, INCLUDED, invoice_date="2026-04-19")
+
+    # Labor stays first; the Direct Payment fee stays last.
+    assert inv.line_items[0].description.startswith(MAINTENANCE_LABOR_DESCRIPTION)
+    assert inv.line_items[-1].item_lookup_name == FEE_ITEM_LOOKUP_NAME
+
+    service_descs = [li.description for li in inv.line_items[1:-1]]
+    assert service_descs == [
+        "Annual Flowers",            # materials (2)
+        "Mulch Installed [Yards]",   # mulch product (3)
+        "Load Time for Bulk Mulch",  # mulch extra (4) — kept before Delivery (stable)
+        "Delivery, Bozeman",         # delivery (4)
+        "Deer Spray",                # deer spray (5)
+        "Dump/Compost",              # dump fee (6)
+    ]
