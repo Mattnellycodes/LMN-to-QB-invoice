@@ -32,6 +32,18 @@ class InvoiceResult:
     error: Optional[str] = None
 
 
+def _is_duplicate_docnumber(error_detail: Optional[dict]) -> bool:
+    """True if a QBO fault indicates a duplicate DocNumber (error code 6140)."""
+    if not error_detail:
+        return False
+    for err in error_detail.get("Fault", {}).get("Error", []):
+        if str(err.get("code")) == "6140":
+            return True
+        if "duplicate document number" in (err.get("Detail") or "").lower():
+            return True
+    return False
+
+
 def create_draft_invoice(
     invoice_data: InvoiceData,
     qbo_customer_id: str,
@@ -79,10 +91,10 @@ def create_draft_invoice(
         qbo_line = build_qbo_line_item(item, i, ref, class_ref=cref)
         qbo_lines.append(qbo_line)
 
-    source_ids = [s.jobsite_id for s in invoice_data.sources] or [invoice_data.jobsite_id]
-    private_note = (
-        "Created from LMN export. JobsiteIDs: " + ", ".join(source_ids)
-    )
+    source_ids = [s.jobsite_id for s in invoice_data.sources] or [
+        invoice_data.jobsite_id
+    ]
+    private_note = "Created from LMN export. JobsiteIDs: " + ", ".join(source_ids)
 
     # Build invoice payload
     payload = {
@@ -106,6 +118,20 @@ def create_draft_invoice(
             terms,
         )
 
+    # QBO won't auto-number when Custom Transaction Numbers is ON, so we assign
+    # our own DocNumber from a counter we control. Degrade gracefully (blank
+    # number) if the DB is unavailable.
+    try:
+        from src.db.invoice_counter import claim_next_invoice_number
+
+        payload["DocNumber"] = claim_next_invoice_number()
+    except Exception:
+        logger.warning(
+            "Could not claim invoice number (DB unavailable?); "
+            "posting jobsite=%s without DocNumber",
+            invoice_data.jobsite_id,
+        )
+
     url = f"{get_api_base_url()}/{realm_id}/invoice"
 
     logger.debug(
@@ -115,98 +141,129 @@ def create_draft_invoice(
         len(qbo_lines),
     )
 
-    try:
-        response = requests.post(
-            url,
-            headers={
-                "Authorization": f"Bearer {access_token}",
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-        )
-        response.raise_for_status()
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
 
-        data = response.json()
-        invoice = data.get("Invoice", {})
-
-        invoice_id = invoice.get("Id")
-        invoice_number = invoice.get("DocNumber")
-        total_amt = float(invoice.get("TotalAmt", 0))
-
-        # Record invoice history for duplicate detection.
-        # Merged (maint + Irr) invoices write one row per source so future
-        # uploads catch overlap on either side.
+    # One retry: if QBO rejects our DocNumber as a duplicate (e.g. it collides
+    # with a hand-entered invoice), claim the next number and post again.
+    for attempt in range(2):
         try:
-            from src.db.invoice_history import record_invoice_creation
+            response = requests.post(url, headers=headers, json=payload)
+            response.raise_for_status()
 
-            if invoice_id:
-                for src in invoice_data.sources:
-                    if not src.date_foreman_pairs:
-                        continue
-                    record_invoice_creation(
-                        jobsite_id=src.jobsite_id,
-                        work_dates=src.work_dates,
-                        foremen=src.foremen,
-                        date_foreman_pairs=src.date_foreman_pairs,
-                        qbo_invoice_id=invoice_id,
-                        qbo_invoice_number=invoice_number or "",
-                        total_amount=total_amt,
-                    )
-        except Exception:
-            logger.exception(
-                "Failed to record invoice history for jobsite=%s invoice_id=%s",
-                invoice_data.jobsite_id,
-                invoice_id,
+            data = response.json()
+            invoice = data.get("Invoice", {})
+
+            invoice_id = invoice.get("Id")
+            invoice_number = invoice.get("DocNumber")
+            total_amt = float(invoice.get("TotalAmt", 0))
+
+            # Record invoice history for duplicate detection.
+            # Merged (maint + Irr) invoices write one row per source so future
+            # uploads catch overlap on either side.
+            try:
+                from src.db.invoice_history import record_invoice_creation
+
+                if invoice_id:
+                    for src in invoice_data.sources:
+                        if not src.date_foreman_pairs:
+                            continue
+                        record_invoice_creation(
+                            jobsite_id=src.jobsite_id,
+                            work_dates=src.work_dates,
+                            foremen=src.foremen,
+                            date_foreman_pairs=src.date_foreman_pairs,
+                            qbo_invoice_id=invoice_id,
+                            qbo_invoice_number=invoice_number or "",
+                            total_amount=total_amt,
+                        )
+            except Exception:
+                logger.exception(
+                    "Failed to record invoice history for jobsite=%s invoice_id=%s",
+                    invoice_data.jobsite_id,
+                    invoice_id,
+                )
+
+            return InvoiceResult(
+                success=True,
+                jobsite_id=invoice_data.jobsite_id,
+                customer_name=invoice_data.customer_name,
+                invoice_id=invoice_id,
+                invoice_number=invoice_number,
+                total=total_amt,
             )
 
-        return InvoiceResult(
-            success=True,
-            jobsite_id=invoice_data.jobsite_id,
-            customer_name=invoice_data.customer_name,
-            invoice_id=invoice_id,
-            invoice_number=invoice_number,
-            total=total_amt,
-        )
+        except requests.exceptions.HTTPError as e:
+            error_msg = str(e)
+            intuit_tid = None
+            error_detail = None
+            try:
+                intuit_tid = (
+                    e.response.headers.get("intuit_tid")
+                    if e.response is not None
+                    else None
+                )
+                error_detail = e.response.json()
+                if "Fault" in error_detail:
+                    errors = error_detail["Fault"].get("Error", [])
+                    if errors:
+                        error_msg = errors[0].get("Detail", error_msg)
+            except Exception:
+                pass
 
-    except requests.exceptions.HTTPError as e:
-        error_msg = str(e)
-        intuit_tid = None
-        try:
-            intuit_tid = e.response.headers.get("intuit_tid") if e.response is not None else None
-            error_detail = e.response.json()
-            if "Fault" in error_detail:
-                errors = error_detail["Fault"].get("Error", [])
-                if errors:
-                    error_msg = errors[0].get("Detail", error_msg)
-        except Exception:
-            pass
-        logger.error(
-            "QBO invoice POST failed: jobsite=%s status=%s intuit_tid=%s error=%s",
-            invoice_data.jobsite_id,
-            getattr(e.response, "status_code", "?"),
-            intuit_tid,
-            error_msg,
-        )
+            if (
+                attempt == 0
+                and "DocNumber" in payload
+                and _is_duplicate_docnumber(error_detail)
+            ):
+                try:
+                    from src.db.invoice_counter import claim_next_invoice_number
 
-        return InvoiceResult(
-            success=False,
-            jobsite_id=invoice_data.jobsite_id,
-            customer_name=invoice_data.customer_name,
-            error=error_msg,
-        )
+                    new_number = claim_next_invoice_number()
+                    logger.warning(
+                        "QBO rejected duplicate DocNumber %s for jobsite=%s; "
+                        "retrying with %s",
+                        payload["DocNumber"],
+                        invoice_data.jobsite_id,
+                        new_number,
+                    )
+                    payload["DocNumber"] = new_number
+                    continue
+                except Exception:
+                    logger.exception(
+                        "Failed to claim replacement invoice number for jobsite=%s",
+                        invoice_data.jobsite_id,
+                    )
 
-    except Exception as e:
-        logger.exception(
-            "Unexpected error creating QBO invoice for jobsite=%s",
-            invoice_data.jobsite_id,
-        )
-        return InvoiceResult(
-            success=False,
-            jobsite_id=invoice_data.jobsite_id,
-            customer_name=invoice_data.customer_name,
-            error=str(e),
-        )
+            logger.error(
+                "QBO invoice POST failed: jobsite=%s status=%s intuit_tid=%s error=%s",
+                invoice_data.jobsite_id,
+                getattr(e.response, "status_code", "?"),
+                intuit_tid,
+                error_msg,
+            )
+
+            return InvoiceResult(
+                success=False,
+                jobsite_id=invoice_data.jobsite_id,
+                customer_name=invoice_data.customer_name,
+                error=error_msg,
+            )
+
+        except Exception as e:
+            logger.exception(
+                "Unexpected error creating QBO invoice for jobsite=%s",
+                invoice_data.jobsite_id,
+            )
+            return InvoiceResult(
+                success=False,
+                jobsite_id=invoice_data.jobsite_id,
+                customer_name=invoice_data.customer_name,
+                error=str(e),
+            )
 
 
 @dataclass
@@ -375,5 +432,3 @@ def calculate_due_date(invoice_date: datetime, terms: str) -> datetime:
 
     days = terms_days.get(terms, 15)
     return invoice_date + timedelta(days=days)
-
-
