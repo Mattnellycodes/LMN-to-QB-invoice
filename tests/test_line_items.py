@@ -166,6 +166,51 @@ def test_zero_price_with_zero_quantity_is_ignored():
     assert extract_zero_price_items(services, INCLUDED) == []
 
 
+def test_misc_irrigation_with_price_forced_to_modal():
+    """A priced 'Miscellaneous, Irrigation*' row is pulled off the invoice
+    and into the manual-review modal regardless of LMN's price."""
+    services = [_svc("Miscellaneous, Irrigation [ea]", qty=1, total=120, rate=120)]
+
+    assert extract_service_line_items(services, INCLUDED) == []
+
+    zero = extract_zero_price_items(services, INCLUDED)
+    assert len(zero) == 1
+    assert zero[0]["description"] == "Miscellaneous, Irrigation [ea]"
+    assert zero[0]["rate"] == 0.0
+
+
+def test_misc_irrigation_with_hardcoded_price_still_goes_to_modal():
+    """A hardcoded price must not auto-bill or suppress an always-review row."""
+    services = [_svc("Miscellaneous, Irrigation [ea]", qty=2, total=50, rate=25)]
+    prices = HardcodedPriceLookup({
+        "Miscellaneous, Irrigation [ea]": PriceEntry("Misc Irrigation, ea", 25.0),
+    })
+
+    assert extract_service_line_items(services, INCLUDED, hardcoded_prices=prices) == []
+    zero = extract_zero_price_items(services, INCLUDED, hardcoded_prices=prices)
+    assert len(zero) == 1
+    assert zero[0]["description"] == "Miscellaneous, Irrigation [ea]"
+
+
+def test_misc_irrigation_zero_quantity_still_goes_to_modal():
+    """Unlike ordinary zero-price rows, an always-review row surfaces even
+    when no quantity was recorded."""
+    services = [_svc("Miscellaneous, Irrigation [ea]", qty=0, total=0, rate=0)]
+    zero = extract_zero_price_items(services, INCLUDED)
+    assert len(zero) == 1
+    assert zero[0]["description"] == "Miscellaneous, Irrigation [ea]"
+
+
+def test_misc_irrigation_prefix_variant_matches():
+    """The wildcard suffix catches any 'Miscellaneous, Irrigation*' variant."""
+    services = [_svc("Miscellaneous, Irrigation, Bozeman [ea]", qty=1, total=80, rate=80)]
+
+    assert extract_service_line_items(services, INCLUDED) == []
+    zero = extract_zero_price_items(services, INCLUDED)
+    assert len(zero) == 1
+    assert zero[0]["description"] == "Miscellaneous, Irrigation, Bozeman [ea]"
+
+
 def test_direct_payment_fee_tiers():
     assert calculate_direct_payment_fee(500) == pytest.approx(5.0)
     assert calculate_direct_payment_fee(1000) == 15.0
@@ -361,3 +406,45 @@ def test_fee_line_has_stable_item_lookup_name():
     fee = next(li for li in inv.line_items
                if li.description == "Direct Payment Fee (Subtract if paying by USPS check)")
     assert fee.item_lookup_name == "Direct Payment Fee"
+
+
+def test_invoice_data_work_dates_sorted_chronologically():
+    # Merged across sources, with dates whose chronological order differs from
+    # the alphabetical-by-weekday order the old sort produced.
+    inv = InvoiceData(
+        jobsite_id="ABC",
+        jobsite_name="Customer A",
+        customer_name="Customer A",
+        invoice_date="2026-05-04",
+        sources=[
+            InvoiceSource(
+                jobsite_id="ABC",
+                jobsite_name="Customer A",
+                class_name="Maintenance",
+                work_dates=["Fri-May-1-2026"],
+            ),
+            InvoiceSource(
+                jobsite_id="ABC-Irr",
+                jobsite_name="Customer A - Irr.",
+                class_name="Irrigation",
+                work_dates=["Mon-Apr-27-2026", "Sat-May-2-2026"],
+            ),
+        ],
+    )
+    assert inv.work_dates == ["Mon-Apr-27-2026", "Fri-May-1-2026", "Sat-May-2-2026"]
+
+
+def test_build_invoice_labor_description_dates_are_chronological():
+    rollup = JobsiteRollup(
+        jobsite_id="ABC",
+        customer_name="Customer A",
+        hourly_rate=75.0,
+    )
+    # Inserted out of chronological order; weekday-alpha sort would emit (5/1, 4/27).
+    rollup.work_by_date_foreman[("Fri-May-1-2026", "Jenna")] = 4.0
+    rollup.work_by_date_foreman[("Mon-Apr-27-2026", "Jenna")] = 3.0
+
+    inv = build_invoice(rollup, INCLUDED, invoice_date="2026-05-04")
+
+    labor = inv.line_items[0]
+    assert labor.description == "Skilled Garden Hourly Labor (4/27, 5/1)"
