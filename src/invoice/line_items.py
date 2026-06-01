@@ -214,11 +214,33 @@ def _is_always_review(description: str) -> bool:
 
 
 # Customer-facing invoice text that differs from the QBO lookup/pricing name.
-# Keyed on item_lookup_name so it applies regardless of the raw LMN spelling.
-# Does NOT affect item_lookup_name (QBO mapping) or pricing resolution.
+# Exact overrides match item_lookup_name (normalized via pricing); prefix
+# overrides match the raw LMN description so every variant of a service is
+# renamed. Neither affects item_lookup_name (QBO mapping) or pricing resolution.
 _DESCRIPTION_OVERRIDES: dict[str, str] = {
     "Deer Spray, Bozeman, ea": "Deer and Rabbit Spray",
 }
+
+# (raw-description prefix -> invoice display text). Renames every "Delivery*"
+# variant ("Delivery, Bozeman", "Delivery (Maintenance), ...") to one label.
+_DESCRIPTION_OVERRIDE_PREFIXES: tuple[tuple[str, str], ...] = (
+    ("Delivery", "Mulch load and Delivery"),
+)
+
+
+def _display_description(item_lookup_name: str, desc: str) -> str:
+    """Customer-facing invoice text for a service line.
+
+    An exact item_lookup_name override wins; otherwise the raw description is
+    matched against rename prefixes. Falls back to the raw description.
+    """
+    override = _DESCRIPTION_OVERRIDES.get(item_lookup_name)
+    if override is not None:
+        return override
+    for prefix, replacement in _DESCRIPTION_OVERRIDE_PREFIXES:
+        if desc.startswith(prefix):
+            return replacement
+    return desc
 
 
 def _classify_service(description: str, total_price: float, included: frozenset[str]) -> str:
@@ -292,7 +314,7 @@ def extract_service_line_items(
         existing = aggregated.get(desc)
         if existing is None:
             aggregated[desc] = LineItem(
-                description=_DESCRIPTION_OVERRIDES.get(item_lookup_name, desc),
+                description=_display_description(item_lookup_name, desc),
                 quantity=qty,
                 rate=rate,
                 amount=round(total, 2),

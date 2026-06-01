@@ -70,10 +70,28 @@ def test_services_dedupe_by_description():
     ]
     items = extract_service_line_items(services, INCLUDED)
     descs = [i.description for i in items]
-    assert descs.count("Delivery, Bozeman") == 1
-    delivery = next(i for i in items if i.description == "Delivery, Bozeman")
+    # Dedup keys on the raw description; the display name is renamed afterward.
+    assert descs.count("Mulch load and Delivery") == 1
+    delivery = next(i for i in items if i.description == "Mulch load and Delivery")
     assert delivery.quantity == pytest.approx(2.0)
     assert delivery.amount == pytest.approx(170.0)
+
+
+def test_delivery_lines_renamed_to_mulch_load_and_delivery():
+    services = [
+        _svc("Delivery, Bozeman", qty=1, total=85, rate=85),
+        _svc("Delivery (Maintenance), Bozeman", qty=1, total=90, rate=90),
+    ]
+    items = extract_service_line_items(services, INCLUDED)
+    # Every "Delivery*" variant shows one display label...
+    assert [i.description for i in items] == [
+        "Mulch load and Delivery",
+        "Mulch load and Delivery",
+    ]
+    # ...while each keeps its own QBO lookup name and price (display-only).
+    assert items[0].item_lookup_name == "Delivery, Bozeman"
+    assert items[1].item_lookup_name == "Delivery (Maintenance), Bozeman"
+    assert items[0].amount == pytest.approx(85.0)
 
 
 def test_hardcoded_price_overrides_service_rate_and_amount():
@@ -460,10 +478,11 @@ def test_service_sort_priority_buckets():
     # Mulch product
     assert _service_sort_priority("Mulch Installed [Yards]") == 3
     assert _service_sort_priority("Mulch, Soil Pep, bulk [Yd]") == 3
-    # Mulch extras + delivery
+    # Mulch extras + delivery (raw name and the overridden display name)
     assert _service_sort_priority("Load Time for Bulk Mulch") == 4
     assert _service_sort_priority("Mulch glue") == 4
     assert _service_sort_priority("Delivery, Bozeman") == 4
+    assert _service_sort_priority("Mulch load and Delivery") == 4
     # Deer spray (matches raw name and the overridden display name)
     assert _service_sort_priority("Deer Spray") == 5
     assert _service_sort_priority("Deer and Rabbit Spray") == 5
@@ -500,7 +519,7 @@ def test_build_invoice_orders_services_into_groups():
         "Annual Flowers",            # materials (2)
         "Mulch Installed [Yards]",   # mulch product (3)
         "Load Time for Bulk Mulch",  # mulch extra (4) — kept before Delivery (stable)
-        "Delivery, Bozeman",         # delivery (4)
+        "Mulch load and Delivery",   # delivery (4), renamed for display
         "Deer Spray",                # deer spray (5)
         "Dump/Compost",              # dump fee (6)
     ]
