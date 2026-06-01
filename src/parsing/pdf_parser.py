@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 from typing import BinaryIO, Union
@@ -26,6 +27,26 @@ DAY_HEADER_RE = re.compile(
     r"^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)-"
     r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{1,2}-\d{4}$"
 )
+
+
+def parse_lmn_date(lmn_date: str) -> datetime | None:
+    """Parse an LMN day-header string ('Mon-May-12-2026') to a datetime.
+
+    Strips the weekday prefix, then parses the 'Mon-DD-YYYY' remainder.
+    Returns None for malformed or empty input.
+    """
+    try:
+        _, rest = lmn_date.split("-", 1)
+        return datetime.strptime(rest, "%b-%d-%Y")
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+def lmn_date_sort_key(lmn_date: str) -> datetime:
+    """Chronological sort key for LMN day-header strings; bad dates sort first."""
+    return parse_lmn_date(lmn_date) or datetime.min
+
+
 JOBSITE_ID_RE = re.compile(r"^\d{5,8}[A-Z]$")
 DATE_RANGE_LINE_RE = re.compile(
     r"^[A-Z][a-z]{2}-\d{1,2}-\d{4} to [A-Z][a-z]{2}-\d{1,2}-\d{4}"

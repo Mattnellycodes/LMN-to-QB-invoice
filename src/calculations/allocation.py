@@ -24,6 +24,7 @@ from src.parsing.pdf_parser import (
     LineItem,
     ParsedReport,
     Task,
+    lmn_date_sort_key,
     parse_money,
 )
 
@@ -104,7 +105,9 @@ class JobsiteRollup:
 
     @property
     def work_dates(self) -> list[str]:
-        return sorted({date for date, _ in self.work_by_date_foreman})
+        return sorted(
+            {date for date, _ in self.work_by_date_foreman}, key=lmn_date_sort_key
+        )
 
     @property
     def foremen(self) -> list[str]:

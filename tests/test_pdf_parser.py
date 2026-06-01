@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,8 @@ from src.parsing.pdf_parser import (
     SHOP_JOBSITE_ID,
     PdfParseError,
     _walk,
+    lmn_date_sort_key,
+    parse_lmn_date,
     parse_pdf,
 )
 
@@ -406,3 +409,33 @@ class TestJobsiteIdLengths:
         assert "5813613W" in report.customers
         second = next(t for t in report.tasks if t.task_name == "Second Task")
         assert second.jobsite_id == "5813613W"
+
+
+class TestParseLmnDate:
+    def test_two_digit_day(self):
+        assert parse_lmn_date("Mon-May-12-2026") == datetime(2026, 5, 12)
+
+    def test_single_digit_day(self):
+        assert parse_lmn_date("Sat-May-2-2026") == datetime(2026, 5, 2)
+
+    def test_malformed_returns_none(self):
+        assert parse_lmn_date("garbage") is None
+
+    def test_empty_returns_none(self):
+        assert parse_lmn_date("") is None
+
+
+class TestLmnDateSortKey:
+    def test_sorts_chronologically_not_by_weekday(self):
+        # Alphabetical-by-weekday would put "Fri" before "Mon"; the real dates
+        # are the reverse, so this pins the chronological ordering.
+        dates = ["Fri-May-1-2026", "Mon-Apr-27-2026", "Sat-May-2-2026"]
+        assert sorted(dates, key=lmn_date_sort_key) == [
+            "Mon-Apr-27-2026",
+            "Fri-May-1-2026",
+            "Sat-May-2-2026",
+        ]
+
+    def test_malformed_sorts_first(self):
+        dates = ["Mon-Apr-27-2026", "garbage"]
+        assert sorted(dates, key=lmn_date_sort_key) == ["garbage", "Mon-Apr-27-2026"]

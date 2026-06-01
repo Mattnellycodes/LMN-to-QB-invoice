@@ -22,7 +22,12 @@ from pathlib import Path
 from typing import Any, Iterable, Optional
 
 from src.calculations.allocation import JobsiteRollup
-from src.parsing.pdf_parser import parse_money, parse_qty
+from src.parsing.pdf_parser import (
+    lmn_date_sort_key,
+    parse_lmn_date,
+    parse_money,
+    parse_qty,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +116,9 @@ class InvoiceData:
 
     @property
     def work_dates(self) -> list[str]:
-        return sorted({d for s in self.sources for d in s.work_dates})
+        return sorted(
+            {d for s in self.sources for d in s.work_dates}, key=lmn_date_sort_key
+        )
 
     @property
     def foremen(self) -> list[str]:
@@ -146,12 +153,12 @@ def load_included_items(path: Path = INCLUDED_ITEMS_PATH) -> frozenset[str]:
 def calculate_direct_payment_fee(subtotal: float) -> float:
     """Direct payment fee tiered by subtotal.
 
-    Under $1,000 -> 10% of subtotal
+    Under $1,000 -> 1% of subtotal
     $1,000 - $2,000 -> $15 flat
     Over $2,000 -> $20 flat
     """
     if subtotal < 1000:
-        return round(subtotal * 0.10, 2)
+        return round(subtotal * 0.01, 2)
     if subtotal <= 2000:
         return 15.00
     return 20.00
@@ -181,15 +188,8 @@ def format_labor_description(dates: list[str], is_irrigation: bool = False) -> s
 
 def _short_date(lmn_date: str) -> str:
     """Convert 'Mon-Apr-13-2026' to '4/13'. Returns '' on failure."""
-    try:
-        # Strip day-of-week prefix.
-        parts = lmn_date.split("-", 1)
-        if len(parts) != 2:
-            return ""
-        dt = datetime.strptime(parts[1], "%b-%d-%Y")
-        return f"{dt.month}/{dt.day}"
-    except (ValueError, TypeError):
-        return ""
+    dt = parse_lmn_date(lmn_date)
+    return f"{dt.month}/{dt.day}" if dt else ""
 
 
 # LMN service descriptions that should never appear on an invoice, regardless
@@ -200,15 +200,82 @@ _ALWAYS_SKIP_DESCRIPTIONS: frozenset[str] = frozenset({
 })
 
 
+# LMN service descriptions that must ALWAYS go to the zero-price modal for manual
+# pricing, regardless of the price LMN reported. Matched as a prefix so every
+# variant ("Miscellaneous, Irrigation [ea]", "Miscellaneous, Irrigation, Bozeman",
+# ...) is caught. str.startswith() requires a tuple, not a frozenset.
+_ALWAYS_REVIEW_PREFIXES: tuple[str, ...] = (
+    "Miscellaneous, Irrigation",
+)
+
+
+def _is_always_review(description: str) -> bool:
+    return description.startswith(_ALWAYS_REVIEW_PREFIXES)
+
+
+# Customer-facing invoice text that differs from the QBO lookup/pricing name.
+# Exact overrides match item_lookup_name (normalized via pricing); prefix
+# overrides match the raw LMN description so every variant of a service is
+# renamed. Neither affects item_lookup_name (QBO mapping) or pricing resolution.
+_DESCRIPTION_OVERRIDES: dict[str, str] = {
+    "Deer Spray, Bozeman, ea": "Deer and Rabbit Spray",
+}
+
+# (raw-description prefix -> invoice display text). Renames every "Delivery*"
+# variant ("Delivery, Bozeman", "Delivery (Maintenance), ...") to one label.
+_DESCRIPTION_OVERRIDE_PREFIXES: tuple[tuple[str, str], ...] = (
+    ("Delivery", "Mulch load and Delivery"),
+)
+
+
+def _display_description(item_lookup_name: str, desc: str) -> str:
+    """Customer-facing invoice text for a service line.
+
+    An exact item_lookup_name override wins; otherwise the raw description is
+    matched against rename prefixes. Falls back to the raw description.
+    """
+    override = _DESCRIPTION_OVERRIDES.get(item_lookup_name)
+    if override is not None:
+        return override
+    for prefix, replacement in _DESCRIPTION_OVERRIDE_PREFIXES:
+        if desc.startswith(prefix):
+            return replacement
+    return desc
+
+
 def _classify_service(description: str, total_price: float, included: frozenset[str]) -> str:
     """Return one of: 'billable', 'included', 'zero_price'."""
     if description in _ALWAYS_SKIP_DESCRIPTIONS:
         return "included"
+    if _is_always_review(description):
+        return "zero_price"
     if total_price > 0:
         return "billable"
     if description in included:
         return "included"
     return "zero_price"
+
+
+def _service_sort_priority(description: str) -> int:
+    """Within-section ordering for service lines (lower sorts first).
+
+    Materials are the default bucket; mulch product sorts ahead of mulch
+    extras (glue, load/delivery); deer spray and dump fee trail the section.
+    Labor is prepended before these and the DP fee is appended after, so
+    neither reaches this function.
+    """
+    d = description.lower()
+    if "dump" in d:
+        return 6
+    if "deer" in d or "rabbit" in d:
+        return 5
+    if "deliver" in d:
+        return 4
+    if "mulch" in d:
+        if "glue" in d or "load" in d:
+            return 4  # mulch extras: glue, load time, etc.
+        return 3  # mulch product
+    return 2  # materials / uncategorized
 
 
 def extract_service_line_items(
@@ -233,7 +300,7 @@ def extract_service_line_items(
         item_lookup_name = strip_unit_marker(desc)
         price_entry = hardcoded_prices.resolve(desc) if hardcoded_prices else None
 
-        if price_entry is not None:
+        if price_entry is not None and not _is_always_review(desc):
             if price_entry.min_quantity is not None:
                 qty = max(qty, price_entry.min_quantity)
             if qty <= 0:
@@ -247,7 +314,7 @@ def extract_service_line_items(
         existing = aggregated.get(desc)
         if existing is None:
             aggregated[desc] = LineItem(
-                description=desc,
+                description=_display_description(item_lookup_name, desc),
                 quantity=qty,
                 rate=rate,
                 amount=round(total, 2),
@@ -284,13 +351,18 @@ def extract_zero_price_items(
         if not desc:
             continue
         total = parse_money(svc.get("total_price", ""))
-        if hardcoded_prices and hardcoded_prices.resolve(desc) is not None:
+        always_review = _is_always_review(desc)
+        if (
+            hardcoded_prices
+            and hardcoded_prices.resolve(desc) is not None
+            and not always_review
+        ):
             continue
         if _classify_service(desc, total, included) != "zero_price":
             continue
 
         qty = parse_qty(svc.get("inv_qty", "")) or parse_qty(svc.get("act_qty", ""))
-        if qty <= 0:
+        if qty <= 0 and not always_review:
             # No quantity means nothing to bill — skip silently.
             continue
 
@@ -358,11 +430,11 @@ def _build_rollup_lines(
             )
         )
 
-    lines.extend(
-        extract_service_line_items(
-            rollup.services, included, class_name, hardcoded_prices
-        )
+    service_lines = extract_service_line_items(
+        rollup.services, included, class_name, hardcoded_prices
     )
+    service_lines.sort(key=lambda li: _service_sort_priority(li.description))
+    lines.extend(service_lines)
     return lines
 
 

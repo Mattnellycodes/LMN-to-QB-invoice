@@ -176,9 +176,9 @@ class TestBuildInvoiceForGroup:
         non_fee_total = sum(
             li.amount for li in inv.line_items if li.description != FEE_DESCRIPTION
         )
-        # Under $1000 so 10% fee
+        # Under $1000 so 1% fee
         assert inv.subtotal == pytest.approx(non_fee_total)
-        assert inv.direct_payment_fee == pytest.approx(round(non_fee_total * 0.10, 2))
+        assert inv.direct_payment_fee == pytest.approx(round(non_fee_total * 0.01, 2))
         assert inv.total == pytest.approx(non_fee_total + inv.direct_payment_fee)
 
 

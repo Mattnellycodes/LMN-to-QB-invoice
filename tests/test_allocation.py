@@ -270,3 +270,15 @@ def test_billable_cost_code_filter_no_longer_drops_non_200():
     result = compute(_report(tasks))
     assert "JOB1" in result.rollups
     assert "JOB2" in result.rollups
+
+
+def test_work_dates_sorted_chronologically_not_by_weekday():
+    # Alphabetical-by-weekday sort would put "Fri-May-1" before "Mon-Apr-27";
+    # the real dates are the reverse. Pins chronological ordering of the labor
+    # dates that feed the invoice description.
+    tasks = [
+        _work_task("Fri-May-1-2026", "Jenna", 4.0, "A", "Cust A"),
+        _work_task("Mon-Apr-27-2026", "Jenna", 3.0, "A", "Cust A"),
+    ]
+    result = compute(_report(tasks))
+    assert result.rollups["A"].work_dates == ["Mon-Apr-27-2026", "Fri-May-1-2026"]
