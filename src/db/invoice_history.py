@@ -20,7 +20,9 @@ logger = logging.getLogger(__name__)
 _PAIR_SEP = "|"
 
 
-def _make_pairs(work_dates: List[str], foremen_by_date: Dict[str, List[str]]) -> List[str]:
+def _make_pairs(
+    work_dates: List[str], foremen_by_date: Dict[str, List[str]]
+) -> List[str]:
     """Build "<date>|<foreman>" strings from a mapping of date -> foremen."""
     pairs: list[str] = []
     for date in work_dates:
@@ -71,9 +73,40 @@ def record_invoice_creation(
     )
 
 
-def find_already_invoiced(
-    jobsite_id: str, date_foreman_pairs: List[str]
+def _query_overlapping_pairs(
+    cursor, jobsite_id: str, date_foreman_pairs: List[str]
 ) -> List[Dict]:
+    """Run the overlap query on an existing cursor and build match dicts.
+
+    Extracted so a caller iterating many jobsites can reuse one connection
+    instead of opening one per jobsite. Returns one dict per prior invoice
+    whose stored pairs intersect `date_foreman_pairs`.
+    """
+    cursor.execute(
+        """
+        SELECT date_foreman_pairs, qbo_invoice_number, qbo_invoice_id, created_at
+        FROM invoice_history
+        WHERE jobsite_id = %s AND date_foreman_pairs && %s
+        """,
+        (jobsite_id, sorted(set(date_foreman_pairs))),
+    )
+    results: list[dict] = []
+    for stored_pairs, invoice_num, invoice_id, created in cursor.fetchall():
+        overlap = sorted(set(date_foreman_pairs) & set(stored_pairs))
+        if not overlap:
+            continue
+        results.append(
+            {
+                "overlapping_pairs": overlap,
+                "qbo_invoice_number": invoice_num,
+                "qbo_invoice_id": invoice_id,
+                "created_at": created.isoformat() if created else None,
+            }
+        )
+    return results
+
+
+def find_already_invoiced(jobsite_id: str, date_foreman_pairs: List[str]) -> List[Dict]:
     """Return prior invoices for this jobsite that overlap any (date, foreman) pair.
 
     Each returned dict includes the overlapping pairs from the candidate set
@@ -83,34 +116,14 @@ def find_already_invoiced(
         return []
 
     with db_cursor() as cursor:
-        cursor.execute(
-            """
-            SELECT date_foreman_pairs, qbo_invoice_number, qbo_invoice_id, created_at
-            FROM invoice_history
-            WHERE jobsite_id = %s AND date_foreman_pairs && %s
-            """,
-            (jobsite_id, sorted(set(date_foreman_pairs))),
-        )
-        results: list[dict] = []
-        for stored_pairs, invoice_num, invoice_id, created in cursor.fetchall():
-            overlap = sorted(set(date_foreman_pairs) & set(stored_pairs))
-            if not overlap:
-                continue
-            results.append(
-                {
-                    "overlapping_pairs": overlap,
-                    "qbo_invoice_number": invoice_num,
-                    "qbo_invoice_id": invoice_id,
-                    "created_at": created.isoformat() if created else None,
-                }
-            )
-        logger.debug(
-            "find_already_invoiced: jobsite=%s candidate_pairs=%d matches=%d",
-            jobsite_id,
-            len(date_foreman_pairs),
-            len(results),
-        )
-        return results
+        results = _query_overlapping_pairs(cursor, jobsite_id, date_foreman_pairs)
+    logger.debug(
+        "find_already_invoiced: jobsite=%s candidate_pairs=%d matches=%d",
+        jobsite_id,
+        len(date_foreman_pairs),
+        len(results),
+    )
+    return results
 
 
 def get_invoices_created_on(work_date: str) -> List[Dict]:

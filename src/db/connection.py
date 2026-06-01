@@ -25,8 +25,14 @@ def get_database_url() -> str:
 
 
 def get_connection() -> PgConnection:
-    """Get a database connection."""
-    return psycopg2.connect(get_database_url())
+    """Get a database connection.
+
+    `connect_timeout` (seconds) bounds the TCP/TLS handshake so a slow or
+    cold Postgres raises OperationalError instead of blocking the worker
+    until gunicorn kills it. Kept well under the gunicorn timeout so callers'
+    `except Exception` fallbacks (e.g. duplicate detection) can still run.
+    """
+    return psycopg2.connect(get_database_url(), connect_timeout=10)
 
 
 @contextmanager
