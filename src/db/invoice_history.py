@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 from src.db.connection import db_cursor
+from src.parsing.pdf_parser import lmn_date_sort_key
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +54,7 @@ def record_invoice_creation(
             """,
             (
                 jobsite_id,
-                sorted(set(work_dates)),
+                sorted(set(work_dates), key=lmn_date_sort_key),
                 sorted(set(foremen)),
                 sorted(set(date_foreman_pairs)),
                 qbo_invoice_id,
@@ -110,6 +111,50 @@ def find_already_invoiced(
             len(results),
         )
         return results
+
+
+def get_invoices_created_on(work_date: str) -> List[Dict]:
+    """Return invoice_history rows whose `created_at::date` matches `work_date` (YYYY-MM-DD).
+
+    Newest first. Used by the duplicate-cleanup preview.
+    """
+    with db_cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT jobsite_id, qbo_invoice_id, qbo_invoice_number, total_amount,
+                   created_at, work_dates, foremen
+            FROM invoice_history
+            WHERE created_at::date = %s::date
+            ORDER BY created_at DESC
+            """,
+            (work_date,),
+        )
+        return [
+            {
+                "jobsite_id": row[0],
+                "qbo_invoice_id": row[1],
+                "qbo_invoice_number": row[2],
+                "total_amount": float(row[3]) if row[3] is not None else 0.0,
+                "created_at": row[4].isoformat() if row[4] else None,
+                "work_dates": row[5],
+                "foremen": row[6],
+            }
+            for row in cursor.fetchall()
+        ]
+
+
+def delete_history_by_invoice_ids(qbo_invoice_ids: List[str]) -> int:
+    """Delete invoice_history rows for the given QBO invoice IDs. Returns rowcount."""
+    if not qbo_invoice_ids:
+        return 0
+    with db_cursor() as cursor:
+        cursor.execute(
+            "DELETE FROM invoice_history WHERE qbo_invoice_id = ANY(%s)",
+            (list(qbo_invoice_ids),),
+        )
+        deleted = cursor.rowcount or 0
+    logger.info("Pruned invoice_history rows: %d (ids=%s)", deleted, qbo_invoice_ids)
+    return deleted
 
 
 def get_invoice_history(jobsite_id: Optional[str] = None) -> List[Dict]:

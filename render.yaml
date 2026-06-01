@@ -3,7 +3,12 @@ services:
     name: lmn-to-qb-invoice
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT
+    # --timeout 600: gunicorn's 30s default kills any synchronous QBO loop after
+    # ~30 invoices (1s/invoice). The user retries, the loop restarts at index 0,
+    # and QBO accepts the duplicate creates. Bumping the timeout buys headroom
+    # while the threaded /create-invoices and /admin/cleanup-recent-duplicates
+    # routes do the real fix.
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --timeout 600 --graceful-timeout 30
     envVars:
       - key: PYTHON_VERSION
         value: "3.11.0"

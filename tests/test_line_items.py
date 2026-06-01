@@ -6,6 +6,11 @@ import pytest
 
 from src.calculations.allocation import JobsiteRollup
 from src.invoice.line_items import (
+    FEE_ITEM_LOOKUP_NAME,
+    MAINTENANCE_LABOR_DESCRIPTION,
+    InvoiceData,
+    InvoiceSource,
+    _service_sort_priority,
     build_invoice,
     calculate_direct_payment_fee,
     extract_service_line_items,
@@ -14,6 +19,7 @@ from src.invoice.line_items import (
     load_included_items,
     strip_unit_marker,
 )
+from src.pricing.hardcoded_price_list import HardcodedPriceLookup, PriceEntry
 
 
 INCLUDED = frozenset(["GRUB-SPRING(VT)", "General Garden Maintenance(VT)", "Small Project"])
@@ -64,10 +70,97 @@ def test_services_dedupe_by_description():
     ]
     items = extract_service_line_items(services, INCLUDED)
     descs = [i.description for i in items]
-    assert descs.count("Delivery, Bozeman") == 1
-    delivery = next(i for i in items if i.description == "Delivery, Bozeman")
+    # Dedup keys on the raw description; the display name is renamed afterward.
+    assert descs.count("Mulch load and Delivery") == 1
+    delivery = next(i for i in items if i.description == "Mulch load and Delivery")
     assert delivery.quantity == pytest.approx(2.0)
     assert delivery.amount == pytest.approx(170.0)
+
+
+def test_delivery_lines_renamed_to_mulch_load_and_delivery():
+    services = [
+        _svc("Delivery, Bozeman", qty=1, total=85, rate=85),
+        _svc("Delivery (Maintenance), Bozeman", qty=1, total=90, rate=90),
+    ]
+    items = extract_service_line_items(services, INCLUDED)
+    # Every "Delivery*" variant shows one display label...
+    assert [i.description for i in items] == [
+        "Mulch load and Delivery",
+        "Mulch load and Delivery",
+    ]
+    # ...while each keeps its own QBO lookup name and price (display-only).
+    assert items[0].item_lookup_name == "Delivery, Bozeman"
+    assert items[1].item_lookup_name == "Delivery (Maintenance), Bozeman"
+    assert items[0].amount == pytest.approx(85.0)
+
+
+def test_hardcoded_price_overrides_service_rate_and_amount():
+    services = [_svc("Dump fee, ea [ea]", qty=2, total=1, rate=0.5)]
+    prices = HardcodedPriceLookup({
+        "Dump fee, ea [ea]": PriceEntry("Dump Fee Bozeman, ea", 25.0),
+    })
+
+    items = extract_service_line_items(services, INCLUDED, hardcoded_prices=prices)
+
+    assert len(items) == 1
+    assert items[0].description == "Dump fee, ea [ea]"
+    assert items[0].quantity == 2.0
+    assert items[0].rate == 25.0
+    assert items[0].amount == 50.0
+    assert items[0].item_lookup_name == "Dump Fee Bozeman, ea"
+
+
+def test_deer_spray_display_name_overridden_lookup_preserved():
+    services = [_svc("Deer Spray", qty=1, total=10, rate=10)]
+    prices = HardcodedPriceLookup({
+        "Deer Spray": PriceEntry("Deer Spray, Bozeman, ea", 10.0),
+    })
+
+    items = extract_service_line_items(services, INCLUDED, hardcoded_prices=prices)
+
+    assert items[0].description == "Deer and Rabbit Spray"
+    assert items[0].item_lookup_name == "Deer Spray, Bozeman, ea"
+
+
+def test_hardcoded_price_turns_zero_price_service_into_billable_line():
+    services = [_svc("Fertilizer [Bags]", qty=3, total=0, rate=0)]
+    prices = HardcodedPriceLookup({
+        "Fertilizer [Bags]": PriceEntry("Fertilizer, Bagged, ea", 9.95),
+    })
+
+    items = extract_service_line_items(services, INCLUDED, hardcoded_prices=prices)
+
+    assert len(items) == 1
+    assert items[0].amount == pytest.approx(29.85)
+    assert extract_zero_price_items(services, INCLUDED, hardcoded_prices=prices) == []
+
+
+def test_hardcoded_price_missing_falls_back_to_zero_price_modal():
+    services = [_svc("Unknown Material", qty=1, total=0, rate=0)]
+    prices = HardcodedPriceLookup({})
+
+    assert extract_service_line_items(
+        services, INCLUDED, hardcoded_prices=prices
+    ) == []
+    zero = extract_zero_price_items(services, INCLUDED, hardcoded_prices=prices)
+    assert len(zero) == 1
+    assert zero[0]["description"] == "Unknown Material"
+
+
+def test_hardcoded_price_min_quantity_applies():
+    services = [_svc("Hedge Shearing [Day]", qty=0.25, total=20, rate=80)]
+    prices = HardcodedPriceLookup({
+        "Hedge Shearing [Day]": PriceEntry(
+            "Hedge Shearing, hr",
+            100.0,
+            min_quantity=1.0,
+        ),
+    })
+
+    items = extract_service_line_items(services, INCLUDED, hardcoded_prices=prices)
+
+    assert items[0].quantity == 1.0
+    assert items[0].amount == 100.0
 
 
 def test_similarly_named_billable_item_is_not_skipped():
@@ -94,19 +187,80 @@ def test_zero_price_with_zero_quantity_is_ignored():
     assert extract_zero_price_items(services, INCLUDED) == []
 
 
+def test_misc_irrigation_with_price_forced_to_modal():
+    """A priced 'Miscellaneous, Irrigation*' row is pulled off the invoice
+    and into the manual-review modal regardless of LMN's price."""
+    services = [_svc("Miscellaneous, Irrigation [ea]", qty=1, total=120, rate=120)]
+
+    assert extract_service_line_items(services, INCLUDED) == []
+
+    zero = extract_zero_price_items(services, INCLUDED)
+    assert len(zero) == 1
+    assert zero[0]["description"] == "Miscellaneous, Irrigation [ea]"
+    assert zero[0]["rate"] == 0.0
+
+
+def test_misc_irrigation_with_hardcoded_price_still_goes_to_modal():
+    """A hardcoded price must not auto-bill or suppress an always-review row."""
+    services = [_svc("Miscellaneous, Irrigation [ea]", qty=2, total=50, rate=25)]
+    prices = HardcodedPriceLookup({
+        "Miscellaneous, Irrigation [ea]": PriceEntry("Misc Irrigation, ea", 25.0),
+    })
+
+    assert extract_service_line_items(services, INCLUDED, hardcoded_prices=prices) == []
+    zero = extract_zero_price_items(services, INCLUDED, hardcoded_prices=prices)
+    assert len(zero) == 1
+    assert zero[0]["description"] == "Miscellaneous, Irrigation [ea]"
+
+
+def test_misc_irrigation_zero_quantity_still_goes_to_modal():
+    """Unlike ordinary zero-price rows, an always-review row surfaces even
+    when no quantity was recorded."""
+    services = [_svc("Miscellaneous, Irrigation [ea]", qty=0, total=0, rate=0)]
+    zero = extract_zero_price_items(services, INCLUDED)
+    assert len(zero) == 1
+    assert zero[0]["description"] == "Miscellaneous, Irrigation [ea]"
+
+
+def test_misc_irrigation_prefix_variant_matches():
+    """The wildcard suffix catches any 'Miscellaneous, Irrigation*' variant."""
+    services = [_svc("Miscellaneous, Irrigation, Bozeman [ea]", qty=1, total=80, rate=80)]
+
+    assert extract_service_line_items(services, INCLUDED) == []
+    zero = extract_zero_price_items(services, INCLUDED)
+    assert len(zero) == 1
+    assert zero[0]["description"] == "Miscellaneous, Irrigation, Bozeman [ea]"
+
+
 def test_direct_payment_fee_tiers():
-    assert calculate_direct_payment_fee(500) == pytest.approx(50.0)
+    assert calculate_direct_payment_fee(500) == pytest.approx(5.0)
     assert calculate_direct_payment_fee(1000) == 15.0
     assert calculate_direct_payment_fee(1500) == 15.0
     assert calculate_direct_payment_fee(2001) == 20.0
 
 
-def test_format_labor_description_single_and_range():
-    assert format_labor_description(["Mon-Apr-13-2026"]) == "Skilled Garden Hourly Labor 4/13"
+def test_format_labor_description_lists_each_visit():
+    assert format_labor_description(["Mon-Apr-13-2026"]) == "Skilled Garden Hourly Labor (4/13)"
     assert (
-        format_labor_description(["Mon-Apr-13-2026", "Wed-Apr-15-2026"])
-        == "Skilled Garden Hourly Labor 4/13-4/15"
+        format_labor_description(
+            ["Mon-Apr-7-2026", "Wed-Apr-9-2026", "Fri-Apr-11-2026"]
+        )
+        == "Skilled Garden Hourly Labor (4/7, 4/9, 4/11)"
     )
+
+
+def test_format_labor_description_irrigation_uses_irrigation_text():
+    assert (
+        format_labor_description(
+            ["Mon-Apr-28-2026", "Tue-Apr-29-2026"], is_irrigation=True
+        )
+        == "Irrigation Technician Hourly Labor (4/28, 4/29)"
+    )
+
+
+def test_format_labor_description_empty_dates_returns_base_only():
+    assert format_labor_description([]) == "Skilled Garden Hourly Labor"
+    assert format_labor_description([], is_irrigation=True) == "Irrigation Technician Hourly Labor"
 
 
 def test_build_invoice_aggregates_labor_and_items():
@@ -203,9 +357,37 @@ def test_labor_line_uses_rate_name_as_lookup_description_preserved():
     labor = inv.line_items[0]
 
     # Customer-facing description stays synthesized.
-    assert labor.description == "Skilled Garden Hourly Labor 4/13"
+    assert labor.description == "Skilled Garden Hourly Labor (4/13)"
     # QBO lookup key is the raw LMN rate name.
     assert labor.item_lookup_name == "Maintenance Skilled Hourly Labor - TOWN"
+
+
+def test_hardcoded_price_overrides_labor_rate():
+    rollup = JobsiteRollup(
+        jobsite_id="ABC",
+        customer_name="Customer A",
+        hourly_rate=75.0,
+        hourly_rate_name="Maintenance Skilled Hourly Labor - TOWN",
+    )
+    rollup.work_by_date_foreman[("Mon-Apr-13-2026", "Jenna")] = 2.0
+    prices = HardcodedPriceLookup({
+        "Maintenance Skilled Hourly Labor - TOWN": PriceEntry(
+            "Maintenance Hourly Labor - TOWN",
+            95.0,
+        ),
+    })
+
+    inv = build_invoice(
+        rollup,
+        INCLUDED,
+        invoice_date="2026-04-19",
+        hardcoded_prices=prices,
+    )
+    labor = inv.line_items[0]
+
+    assert labor.rate == 95.0
+    assert labor.amount == 190.0
+    assert labor.item_lookup_name == "Maintenance Hourly Labor - TOWN"
 
 
 def test_labor_line_amount_matches_rounded_qty_times_rate():
@@ -245,3 +427,99 @@ def test_fee_line_has_stable_item_lookup_name():
     fee = next(li for li in inv.line_items
                if li.description == "Direct Payment Fee (Subtract if paying by USPS check)")
     assert fee.item_lookup_name == "Direct Payment Fee"
+
+
+def test_invoice_data_work_dates_sorted_chronologically():
+    # Merged across sources, with dates whose chronological order differs from
+    # the alphabetical-by-weekday order the old sort produced.
+    inv = InvoiceData(
+        jobsite_id="ABC",
+        jobsite_name="Customer A",
+        customer_name="Customer A",
+        invoice_date="2026-05-04",
+        sources=[
+            InvoiceSource(
+                jobsite_id="ABC",
+                jobsite_name="Customer A",
+                class_name="Maintenance",
+                work_dates=["Fri-May-1-2026"],
+            ),
+            InvoiceSource(
+                jobsite_id="ABC-Irr",
+                jobsite_name="Customer A - Irr.",
+                class_name="Irrigation",
+                work_dates=["Mon-Apr-27-2026", "Sat-May-2-2026"],
+            ),
+        ],
+    )
+    assert inv.work_dates == ["Mon-Apr-27-2026", "Fri-May-1-2026", "Sat-May-2-2026"]
+
+
+def test_build_invoice_labor_description_dates_are_chronological():
+    rollup = JobsiteRollup(
+        jobsite_id="ABC",
+        customer_name="Customer A",
+        hourly_rate=75.0,
+    )
+    # Inserted out of chronological order; weekday-alpha sort would emit (5/1, 4/27).
+    rollup.work_by_date_foreman[("Fri-May-1-2026", "Jenna")] = 4.0
+    rollup.work_by_date_foreman[("Mon-Apr-27-2026", "Jenna")] = 3.0
+
+    inv = build_invoice(rollup, INCLUDED, invoice_date="2026-05-04")
+
+    labor = inv.line_items[0]
+    assert labor.description == "Skilled Garden Hourly Labor (4/27, 5/1)"
+
+
+def test_service_sort_priority_buckets():
+    # Materials / uncategorized
+    assert _service_sort_priority("Annual Flowers") == 2
+    assert _service_sort_priority("Irrigation valve repair part") == 2
+    # Mulch product
+    assert _service_sort_priority("Mulch Installed [Yards]") == 3
+    assert _service_sort_priority("Mulch, Soil Pep, bulk [Yd]") == 3
+    # Mulch extras + delivery (raw name and the overridden display name)
+    assert _service_sort_priority("Load Time for Bulk Mulch") == 4
+    assert _service_sort_priority("Mulch glue") == 4
+    assert _service_sort_priority("Delivery, Bozeman") == 4
+    assert _service_sort_priority("Mulch load and Delivery") == 4
+    # Deer spray (matches raw name and the overridden display name)
+    assert _service_sort_priority("Deer Spray") == 5
+    assert _service_sort_priority("Deer and Rabbit Spray") == 5
+    # Dump fee (matches every observed variant)
+    assert _service_sort_priority("Dump fee") == 6
+    assert _service_sort_priority("Dump/Compost") == 6
+
+
+def test_build_invoice_orders_services_into_groups():
+    rollup = JobsiteRollup(
+        jobsite_id="ABC",
+        customer_name="Customer A",
+        hourly_rate=75.0,
+    )
+    rollup.work_by_date_foreman[("Mon-Apr-13-2026", "Jenna")] = 4.0
+    # Deliberately scrambled so a no-op sort would fail the assertion below.
+    rollup.services = [
+        _svc("Dump/Compost", qty=1, total=30, rate=30),
+        _svc("Load Time for Bulk Mulch", qty=1, total=55, rate=55),
+        _svc("Annual Flowers", qty=1, total=20, rate=20),
+        _svc("Deer Spray", qty=1, total=45, rate=45),
+        _svc("Mulch Installed [Yards]", qty=2, total=100, rate=50),
+        _svc("Delivery, Bozeman", qty=1, total=85, rate=85),
+    ]
+
+    inv = build_invoice(rollup, INCLUDED, invoice_date="2026-04-19")
+
+    # Labor stays first; the Direct Payment fee stays last.
+    assert inv.line_items[0].description.startswith(MAINTENANCE_LABOR_DESCRIPTION)
+    assert inv.line_items[-1].item_lookup_name == FEE_ITEM_LOOKUP_NAME
+
+    service_descs = [li.description for li in inv.line_items[1:-1]]
+    assert service_descs == [
+        "Annual Flowers",            # materials (2)
+        "Mulch Installed [Yards]",   # mulch product (3)
+        "Load Time for Bulk Mulch",  # mulch extra (4) — kept before Delivery (stable)
+        "Mulch load and Delivery",   # delivery (4), renamed for display
+        "Deer Spray",                # deer spray (5)
+        "Dump/Compost",              # dump fee (6)
+    ]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,8 @@ from src.parsing.pdf_parser import (
     SHOP_JOBSITE_ID,
     PdfParseError,
     _walk,
+    lmn_date_sort_key,
+    parse_lmn_date,
     parse_pdf,
 )
 
@@ -362,3 +365,77 @@ class TestInNotesFlag:
         ])
         parts = task.notes.split("\n")
         assert parts == ["Inline part one", "Continuation part two", "Continuation part three"]
+
+
+class TestJobsiteIdLengths:
+    """Customer-header detection must accept 6- and 7-digit LMN jobsite IDs.
+
+    Regression for the April 2026 incident where `*Maintenance Sample- Land`
+    (jobsite `665522W`, 6 digits) was not recognized as a customer header,
+    causing its tasks to be silently attributed to the previous customer
+    (Dowling, Margaret).
+    """
+
+    def _two_customer_pages(self, second_jobsite_id: str) -> list:
+        first_header = _ln("First Customer", "9999001A", y=900.0)
+        first_day = _ln("Mon-Apr-6-2026", "Total Man Hrs for Day", y=860.0)
+        first_task = _ln("Task Name: First Task Foreman: Alice", y=820.0)
+        first_close = _ln("Total Man Hours for Job: 8.00", y=780.0)
+
+        second_header = _ln("Second Customer", second_jobsite_id, y=720.0)
+        second_day = _ln("Tue-Apr-7-2026", "Total Man Hrs for Day", y=680.0)
+        second_task = _ln("Task Name: Second Task Foreman: Bob", y=640.0)
+
+        return [[
+            first_header,
+            first_day,
+            first_task,
+            first_close,
+            second_header,
+            second_day,
+            second_task,
+        ]]
+
+    def test_six_digit_jobsite_id_recognized(self):
+        report = _walk(self._two_customer_pages("665522W"))
+        assert "665522W" in report.customers
+        assert report.customers["665522W"].name == "Second Customer"
+        second = next(t for t in report.tasks if t.task_name == "Second Task")
+        assert second.jobsite_id == "665522W"
+        assert second.customer_name == "Second Customer"
+
+    def test_seven_digit_jobsite_id_still_recognized(self):
+        report = _walk(self._two_customer_pages("5813613W"))
+        assert "5813613W" in report.customers
+        second = next(t for t in report.tasks if t.task_name == "Second Task")
+        assert second.jobsite_id == "5813613W"
+
+
+class TestParseLmnDate:
+    def test_two_digit_day(self):
+        assert parse_lmn_date("Mon-May-12-2026") == datetime(2026, 5, 12)
+
+    def test_single_digit_day(self):
+        assert parse_lmn_date("Sat-May-2-2026") == datetime(2026, 5, 2)
+
+    def test_malformed_returns_none(self):
+        assert parse_lmn_date("garbage") is None
+
+    def test_empty_returns_none(self):
+        assert parse_lmn_date("") is None
+
+
+class TestLmnDateSortKey:
+    def test_sorts_chronologically_not_by_weekday(self):
+        # Alphabetical-by-weekday would put "Fri" before "Mon"; the real dates
+        # are the reverse, so this pins the chronological ordering.
+        dates = ["Fri-May-1-2026", "Mon-Apr-27-2026", "Sat-May-2-2026"]
+        assert sorted(dates, key=lmn_date_sort_key) == [
+            "Mon-Apr-27-2026",
+            "Fri-May-1-2026",
+            "Sat-May-2-2026",
+        ]
+
+    def test_malformed_sorts_first(self):
+        dates = ["Mon-Apr-27-2026", "garbage"]
+        assert sorted(dates, key=lmn_date_sort_key) == ["garbage", "Mon-Apr-27-2026"]

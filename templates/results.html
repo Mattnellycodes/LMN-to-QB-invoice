@@ -83,6 +83,14 @@
 </div>
 {% endif %}
 
+{% if result.hardcoded_prices_applied %}
+<div class="flash error">
+    <strong>Hardcoded 2026 price list applied.</strong>
+    Workbook prices were used for matching labor, service, material, and equipment lines.
+    Lines without a workbook match kept the LMN PDF price.
+</div>
+{% endif %}
+
 {% if result.fallback_error %}
 <div class="flash error">
     <strong>Can't create invoices:</strong> {{ result.fallback_error }}
@@ -91,6 +99,23 @@
 <div class="flash warning">
     <strong>{{ result.fallback_lookup_names|length }} line item description(s) will use the <em>Other</em> catch-all QBO Product/Service.</strong>
     <a href="{{ url_for('item_mapping') }}" class="btn btn-secondary" style="margin-left: 0.5rem;">Map to specific products &rarr;</a>
+</div>
+{% endif %}
+
+{% if result.missing_email_count %}
+<div class="flash warning">
+    <strong>{{ result.missing_email_count }} customer(s) missing email in QuickBooks.</strong>
+    Their invoices will post without a recipient address — add the email in QBO and re-upload to send these by email.
+    <details class="mt-20">
+        <summary>View customers</summary>
+        <ul>
+            {% for invoice in result.invoices %}
+                {% if invoice.qbo_customer_id and not invoice.customer_email %}
+                <li>{{ invoice.qbo_display_name or invoice.customer_name }} ({{ invoice.jobsite_name }})</li>
+                {% endif %}
+            {% endfor %}
+        </ul>
+    </details>
 </div>
 {% endif %}
 

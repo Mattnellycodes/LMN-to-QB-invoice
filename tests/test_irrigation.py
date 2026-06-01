@@ -34,12 +34,18 @@ def _svc(description, qty=1.0, total=0.0, rate=0.0,
 
 
 def _rollup(jobsite_id, name, work_hours=8.0, rate=75.0, services=None,
-            date="Mon-Apr-13-2026", foreman="Jenna"):
+            date="Mon-Apr-13-2026", foreman="Jenna", is_irrigation=None):
+    # Default: classifier mirrors the production rule — anything with the
+    # " - Irr." suffix is irrigation. Tests can override explicitly.
+    if is_irrigation is None:
+        from src.invoice.irrigation import has_irr_suffix
+        is_irrigation = has_irr_suffix(name)
     r = JobsiteRollup(
         jobsite_id=jobsite_id,
         customer_name=name,
         hourly_rate=rate,
         hourly_rate_name="TOWN Hourly",
+        is_irrigation=is_irrigation,
     )
     r.work_by_date_foreman[(date, foreman)] = work_hours
     r.services = list(services or [])
@@ -170,9 +176,9 @@ class TestBuildInvoiceForGroup:
         non_fee_total = sum(
             li.amount for li in inv.line_items if li.description != FEE_DESCRIPTION
         )
-        # Under $1000 so 10% fee
+        # Under $1000 so 1% fee
         assert inv.subtotal == pytest.approx(non_fee_total)
-        assert inv.direct_payment_fee == pytest.approx(round(non_fee_total * 0.10, 2))
+        assert inv.direct_payment_fee == pytest.approx(round(non_fee_total * 0.01, 2))
         assert inv.total == pytest.approx(non_fee_total + inv.direct_payment_fee)
 
 

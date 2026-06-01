@@ -111,7 +111,24 @@ def init_db() -> None:
             )
         """)
 
+        # Invoice number counter — single-row sequence for self-assigned
+        # DocNumbers (QBO won't auto-number when Custom Transaction Numbers is
+        # ON). `counter` holds the next sequence to issue; seeded at 0 so the
+        # first invoice is "26-00000".
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS invoice_number_counter (
+                id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+                counter INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        cursor.execute("""
+            INSERT INTO invoice_number_counter (id, counter)
+            VALUES (1, 0)
+            ON CONFLICT (id) DO NOTHING
+        """)
+
     logger.info(
         "Database initialized: customer_mapping_overrides, invoice_history, "
-        "lmn_credentials, item_mapping_overrides tables ready"
+        "lmn_credentials, item_mapping_overrides, invoice_number_counter "
+        "tables ready"
     )

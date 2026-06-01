@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import secrets
+import threading
 import time
 from datetime import datetime
 from functools import wraps
@@ -94,6 +95,7 @@ def _set_invoice_result(result):
     else:
         session["invoice_results_key"] = results_store.save(result)
 
+
 app = Flask(__name__)
 
 # Flask secret key - required for session security
@@ -109,9 +111,12 @@ app.secret_key = _secret_key
 # Initialize database tables (idempotent - uses CREATE TABLE IF NOT EXISTS)
 try:
     from src.db.connection import init_db
+
     init_db()
 except Exception:
-    logger.exception("Database initialization failed — app will run without DB features")
+    logger.exception(
+        "Database initialization failed — app will run without DB features"
+    )
 
 
 # =============================================================================
@@ -373,8 +378,7 @@ def upload_post():
     from src.web_processing import ProcessingError, UploadedPdf, process_uploaded_pdfs
 
     pdf_files = [
-        file for file in request.files.getlist("pdf_file")
-        if file and file.filename
+        file for file in request.files.getlist("pdf_file") if file and file.filename
     ]
 
     if not pdf_files:
@@ -391,17 +395,23 @@ def upload_post():
             UploadedPdf(filename=pdf_file.filename, content=pdf_file.read())
             for pdf_file in pdf_files
         ]
-        result = process_uploaded_pdfs(uploads)
+        use_hardcoded_prices = request.form.get("use_hardcoded_prices") == "1"
+        result = process_uploaded_pdfs(
+            uploads,
+            use_hardcoded_prices=use_hardcoded_prices,
+        )
 
         _clear_processing_result()
         _set_processing_result(result)
 
         logger.info(
-            "POST /upload committed: files=%d invoices=%d unmapped=%d zero_price=%d",
+            "POST /upload committed: files=%d invoices=%d unmapped=%d "
+            "zero_price=%d hardcoded_prices=%s",
             len(uploads),
             len(result.get("invoices", [])),
             len(result.get("unmapped_jobsites", [])),
             len(result.get("zero_price_items", [])),
+            result.get("hardcoded_prices_applied", False),
         )
 
         if result.get("unmapped_jobsites"):
@@ -680,6 +690,8 @@ def results():
         "fallback_lookup_names": result.get("fallback_lookup_names", []),
         "fallback_error": result.get("fallback_error"),
         "shop_missing": result.get("shop_missing", False),
+        "hardcoded_prices_applied": result.get("hardcoded_prices_applied", False),
+        "hardcoded_price_count": result.get("hardcoded_price_count", 0),
         "summary": {
             "total_jobsites": len(all_invoices),
             "mapped_jobsites": len(mapped_invoices),
@@ -711,7 +723,11 @@ def update_zero_price_items():
     if not zero_price_items:
         return redirect(url_for("results"))
 
-    submitted_keys = sorted(k for k in request.form.keys() if k.startswith(("rate_", "quantity_", "description_")))
+    submitted_keys = sorted(
+        k
+        for k in request.form.keys()
+        if k.startswith(("rate_", "quantity_", "description_"))
+    )
     logger.info(
         "POST /update-zero-price-items: %d active items, form keys=%s",
         len(zero_price_items),
@@ -812,9 +828,7 @@ def update_zero_price_items():
     # Re-resolve item refs now that new line descriptions are in play.
     from src.web_processing import _resolve_line_items
 
-    item_refs, fallback_names, fallback_error = _resolve_line_items(
-        result["invoices"]
-    )
+    item_refs, fallback_names, fallback_error = _resolve_line_items(result["invoices"])
     result["item_refs"] = item_refs
     result["fallback_lookup_names"] = fallback_names
     result["fallback_error"] = fallback_error
@@ -832,20 +846,90 @@ def update_zero_price_items():
     return redirect(url_for("results"))
 
 
+def _run_invoice_creation(
+    flask_app,
+    progress_key,
+    invoice_results_key,
+    invoices,
+    item_refs,
+    qbo_tokens,
+):
+    """Background worker: create invoices in QBO and write progress to disk.
+
+    Runs in a daemon thread spawned by /create-invoices. Uses a fresh app
+    context so request-scoped helpers (set_qbo_credentials, DB writes) work.
+    """
+    from src.qbo.context import set_qbo_credentials
+    from src.web_processing import create_qbo_invoices
+
+    total = len(invoices)
+    with flask_app.app_context():
+        set_qbo_credentials(qbo_tokens["access_token"], qbo_tokens["realm_id"])
+
+        def on_progress(completed, total_, last):
+            results_store.save_progress(
+                progress_key,
+                {
+                    "status": "running",
+                    "completed": completed,
+                    "total": total_,
+                    "current": last.get("customer_name"),
+                },
+            )
+
+        try:
+            invoice_results = create_qbo_invoices(
+                invoices, item_refs, progress_callback=on_progress
+            )
+            results_store.update(invoice_results_key, invoice_results)
+            success_count = sum(1 for r in invoice_results if r.get("success"))
+            logger.info(
+                "Background invoice creation finished: created=%d failed=%d",
+                success_count,
+                len(invoice_results) - success_count,
+            )
+            results_store.save_progress(
+                progress_key,
+                {
+                    "status": "done",
+                    "completed": len(invoice_results),
+                    "total": total,
+                    "current": None,
+                },
+            )
+        except Exception as e:
+            logger.exception("Background invoice creation failed")
+            results_store.save_progress(
+                progress_key,
+                {
+                    "status": "error",
+                    "error": str(e),
+                    "completed": 0,
+                    "total": total,
+                    "current": None,
+                },
+            )
+
+
 @app.route("/create-invoices", methods=["POST"])
 @require_qbo_auth
 def create_invoices():
-    """Create draft invoices in QuickBooks."""
-    from src.web_processing import create_qbo_invoices
-
+    """Kick off invoice creation in a background thread; render loading page."""
     result = _get_processing_result()
+    results_key = session.get("results_key")
     if not result or not result.get("invoices"):
         logger.warning(
             "POST /create-invoices: missing or empty result (key=%s)",
-            session.get("results_key"),
+            results_key,
         )
         flash("No invoices to create.", "warning")
         return redirect(url_for("results"))
+
+    # If a previous run for this upload is still in flight, just re-render
+    # the loading page instead of spawning a second thread.
+    existing = results_store.load_progress(results_key)
+    if existing and existing.get("status") == "running":
+        return render_template("creating_invoices.html", total=existing.get("total", 0))
 
     # Block if the Other fallback item couldn't be resolved — QBO requires
     # an ItemRef on every line, so submitting now would cause API rejections.
@@ -881,20 +965,52 @@ def create_invoices():
         bool(request.form.get("skip_duplicates")),
     )
 
-    try:
-        invoice_results = create_qbo_invoices(mapped_invoices, item_refs)
-        _set_invoice_result(invoice_results)
-        success_count = sum(1 for r in invoice_results if r.get("success"))
-        logger.info(
-            "POST /create-invoices committed: created=%d failed=%d",
-            success_count,
-            len(invoice_results) - success_count,
-        )
-        return redirect(url_for("invoice_results"))
-    except Exception as e:
-        logger.exception("POST /create-invoices failed")
-        flash(f"Error creating invoices: {e}", "error")
-        return redirect(url_for("results"))
+    # Reserve a key for the eventual invoice-results blob so the worker thread
+    # can write to it directly (it can't touch session).
+    invoice_results_key = results_store.save([])
+    session["invoice_results_key"] = invoice_results_key
+
+    qbo_tokens = session.get("qbo_tokens") or {}
+
+    # Initialize progress sidecar before spawning so the loading page sees
+    # status=running on its first poll even if the thread hasn't yielded yet.
+    results_store.save_progress(
+        results_key,
+        {
+            "status": "running",
+            "completed": 0,
+            "total": len(mapped_invoices),
+            "current": None,
+        },
+    )
+
+    threading.Thread(
+        target=_run_invoice_creation,
+        args=(
+            app,
+            results_key,
+            invoice_results_key,
+            mapped_invoices,
+            item_refs,
+            qbo_tokens,
+        ),
+        daemon=True,
+    ).start()
+
+    return render_template("creating_invoices.html", total=len(mapped_invoices))
+
+
+@app.route("/create-invoices/progress")
+def create_invoices_progress():
+    """Return JSON status of the in-flight invoice-creation thread."""
+    results_key = session.get("results_key")
+    progress = results_store.load_progress(results_key)
+    if progress is None:
+        return jsonify({"error": "no progress"}), 404
+    if progress.get("status") == "done":
+        progress = dict(progress)
+        progress["redirect"] = url_for("invoice_results")
+    return jsonify(progress)
 
 
 @app.route("/invoice-results")
@@ -911,6 +1027,405 @@ def invoice_results():
         return redirect(url_for("index"))
 
     return render_template("invoice_results.html", results=results)
+
+
+# =============================================================================
+# Admin: delete every QBO invoice created on a target date (broken-run recovery)
+# =============================================================================
+
+
+def _build_cleanup_preview(target_date: str) -> dict:
+    """Build the list of invoices to delete for `target_date` (YYYY-MM-DD).
+
+    Combines two sources so a partial-write on the broken run still gets cleaned
+    up: every `invoice_history` row for the date, plus any QBO invoice whose
+    MetaData.CreateTime falls on the date but is missing from `invoice_history`.
+    Both sources go into a single flat list — every invoice will be deleted.
+    """
+    from src.db.invoice_history import get_invoices_created_on
+    from src.qbo.invoices import query_invoices_created_since
+
+    rows = get_invoices_created_on(target_date)
+    history_targets = [
+        {
+            "source": "invoice_history",
+            "qbo_invoice_id": str(r["qbo_invoice_id"]),
+            "qbo_invoice_number": r["qbo_invoice_number"],
+            "label": r["jobsite_id"],
+            "total_amount": r["total_amount"],
+            "created_at": r["created_at"],
+        }
+        for r in rows
+    ]
+
+    orphan_targets: list[dict] = []
+    cross_check_error: str | None = None
+    try:
+        iso_start = f"{target_date}T00:00:00Z"
+        qbo_invoices = query_invoices_created_since(iso_start)
+        known_ids = {str(r["qbo_invoice_id"]) for r in rows}
+        for inv in qbo_invoices:
+            inv_id = str(inv.get("Id"))
+            if inv_id in known_ids:
+                continue
+            create_time = (inv.get("MetaData") or {}).get("CreateTime") or ""
+            # Filter to this date only — the QBO query is lower-bounded but
+            # may include later days if the user runs cleanup days after.
+            if not create_time.startswith(target_date):
+                continue
+            orphan_targets.append(
+                {
+                    "source": "qbo_orphan",
+                    "qbo_invoice_id": inv_id,
+                    "qbo_invoice_number": inv.get("DocNumber"),
+                    "label": (inv.get("CustomerRef") or {}).get("name")
+                    or (inv.get("CustomerRef") or {}).get("value"),
+                    "total_amount": float(inv.get("TotalAmt") or 0),
+                    "created_at": create_time,
+                }
+            )
+    except Exception as e:
+        logger.exception("QBO orphan cross-check failed")
+        cross_check_error = str(e)
+
+    all_targets = history_targets + orphan_targets
+    all_targets.sort(key=lambda t: t.get("created_at") or "")
+
+    return {
+        "target_date": target_date,
+        "all_targets": all_targets,
+        "history_count": len(history_targets),
+        "orphan_count": len(orphan_targets),
+        "cross_check_error": cross_check_error,
+        "total_amount_sum": round(sum(t["total_amount"] or 0 for t in all_targets), 2),
+    }
+
+
+@app.route("/admin/cleanup-recent-duplicates")
+@require_qbo_auth
+def admin_cleanup_preview():
+    """Preview every invoice created on the target date (default: today)."""
+    target_date = request.args.get("date") or datetime.now().strftime("%Y-%m-%d")
+    preview = _build_cleanup_preview(target_date)
+
+    confirm_token = secrets.token_urlsafe(16)
+    session["cleanup_confirm_token"] = confirm_token
+    session["cleanup_target_date"] = target_date
+
+    return render_template(
+        "cleanup_duplicates.html",
+        preview=preview,
+        confirm_token=confirm_token,
+        executed=False,
+    )
+
+
+def _run_cleanup_deletion(
+    flask_app,
+    progress_key: str,
+    results_key: str,
+    target_date: str,
+    qbo_tokens: dict,
+):
+    """Background worker: delete every invoice in the rebuilt preview.
+
+    Mirrors `_run_invoice_creation` — fresh app context, set credentials from
+    the passed token snapshot, write progress to disk after every delete, prune
+    invoice_history per-row so a mid-run crash leaves consistent state.
+    """
+    from src.db.invoice_history import delete_history_by_invoice_ids
+    from src.qbo.context import set_qbo_credentials
+    from src.qbo.invoices import delete_invoice
+
+    with flask_app.app_context():
+        set_qbo_credentials(qbo_tokens["access_token"], qbo_tokens["realm_id"])
+
+        try:
+            preview = _build_cleanup_preview(target_date)
+            targets = preview["all_targets"]
+            total = len(targets)
+
+            results_store.save_progress(
+                progress_key,
+                {
+                    "status": "running",
+                    "completed": 0,
+                    "total": total,
+                    "current": None,
+                    "deleted_count": 0,
+                    "failed_count": 0,
+                },
+            )
+
+            deleted: list[dict] = []
+            failed: list[dict] = []
+            for i, target in enumerate(targets, start=1):
+                invoice_id = target["qbo_invoice_id"]
+                label = target.get("label") or invoice_id
+                results_store.save_progress(
+                    progress_key,
+                    {
+                        "status": "running",
+                        "completed": i - 1,
+                        "total": total,
+                        "current": f"{label} (#{target.get('qbo_invoice_number') or invoice_id})",
+                        "deleted_count": len(deleted),
+                        "failed_count": len(failed),
+                    },
+                )
+                result = delete_invoice(invoice_id)
+                record = {
+                    "source": target["source"],
+                    "label": target["label"],
+                    "qbo_invoice_id": invoice_id,
+                    "qbo_invoice_number": target["qbo_invoice_number"],
+                    "total_amount": target["total_amount"],
+                }
+                if result.success:
+                    deleted.append(record)
+                    if target["source"] == "invoice_history":
+                        try:
+                            delete_history_by_invoice_ids([invoice_id])
+                        except Exception:
+                            logger.exception(
+                                "Per-row invoice_history prune failed for id=%s",
+                                invoice_id,
+                            )
+                else:
+                    record["error"] = result.error
+                    failed.append(record)
+
+                results_store.save_progress(
+                    progress_key,
+                    {
+                        "status": "running",
+                        "completed": i,
+                        "total": total,
+                        "current": None,
+                        "deleted_count": len(deleted),
+                        "failed_count": len(failed),
+                    },
+                )
+
+            results_store.update(
+                results_key,
+                {
+                    "preview": preview,
+                    "deleted": deleted,
+                    "failed": failed,
+                    "pruned": sum(
+                        1 for d in deleted if d["source"] == "invoice_history"
+                    ),
+                },
+            )
+            results_store.save_progress(
+                progress_key,
+                {
+                    "status": "done",
+                    "completed": total,
+                    "total": total,
+                    "current": None,
+                    "deleted_count": len(deleted),
+                    "failed_count": len(failed),
+                },
+            )
+            logger.info(
+                "Cleanup deletion finished: deleted=%d failed=%d",
+                len(deleted),
+                len(failed),
+            )
+        except Exception as e:
+            logger.exception("Background cleanup deletion failed")
+            results_store.save_progress(
+                progress_key,
+                {
+                    "status": "error",
+                    "error": str(e),
+                    "completed": 0,
+                    "total": 0,
+                    "current": None,
+                    "deleted_count": 0,
+                    "failed_count": 0,
+                },
+            )
+
+
+def _cleanup_progress_key(target_date: str) -> str:
+    """Stable per-day progress key — survives session loss after a worker restart."""
+    return f"cleanup-{target_date}"
+
+
+@app.route("/admin/cleanup-recent-duplicates", methods=["POST"])
+@require_qbo_auth
+def admin_cleanup_execute():
+    """Spawn the deletion worker; render the polling progress page."""
+    submitted_token = request.form.get("confirm_token")
+    expected_token = session.pop("cleanup_confirm_token", None)
+    target_date = session.pop("cleanup_target_date", None) or datetime.now().strftime(
+        "%Y-%m-%d"
+    )
+    if not submitted_token or submitted_token != expected_token:
+        flash("Cleanup confirmation expired or invalid — re-open the preview.", "error")
+        return redirect(url_for("admin_cleanup_preview", date=target_date))
+
+    progress_key = _cleanup_progress_key(target_date)
+
+    # If a previous run is still in flight, just re-render the polling page.
+    existing = results_store.load_progress(progress_key)
+    if existing and existing.get("status") == "running":
+        session["cleanup_results_key"] = session.get("cleanup_results_key") or ""
+        return render_template(
+            "cleanup_progress.html",
+            target_date=target_date,
+            total=existing.get("total", 0),
+        )
+
+    # Reserve a results blob the worker writes the final deleted/failed lists to.
+    results_key = results_store.save({"deleted": [], "failed": [], "preview": None})
+    session["cleanup_results_key"] = results_key
+
+    qbo_tokens = session.get("qbo_tokens") or {}
+
+    # Pre-write initial progress so the loading page sees status=running on
+    # its first poll even if the thread hasn't yielded yet.
+    results_store.save_progress(
+        progress_key,
+        {
+            "status": "running",
+            "completed": 0,
+            "total": 0,  # actual total populated by the worker after preview rebuild
+            "current": None,
+            "deleted_count": 0,
+            "failed_count": 0,
+        },
+    )
+
+    threading.Thread(
+        target=_run_cleanup_deletion,
+        args=(app, progress_key, results_key, target_date, qbo_tokens),
+        daemon=True,
+    ).start()
+
+    return render_template(
+        "cleanup_progress.html",
+        target_date=target_date,
+        total=0,
+    )
+
+
+@app.route("/admin/cleanup-recent-duplicates/progress")
+@require_qbo_auth
+def admin_cleanup_progress():
+    """JSON status of the in-flight cleanup deletion thread."""
+    target_date = request.args.get("date") or datetime.now().strftime("%Y-%m-%d")
+    progress = results_store.load_progress(_cleanup_progress_key(target_date))
+    if progress is None:
+        return jsonify({"error": "no progress"}), 404
+    if progress.get("status") == "done":
+        progress = dict(progress)
+        progress["redirect"] = url_for(
+            "admin_cleanup_results", date=target_date
+        )
+    return jsonify(progress)
+
+
+@app.route("/admin/cleanup-recent-duplicates/results")
+@require_qbo_auth
+def admin_cleanup_results():
+    """Render the final deleted/failed report after the worker completes."""
+    target_date = request.args.get("date") or datetime.now().strftime("%Y-%m-%d")
+    results_key = session.get("cleanup_results_key")
+    final = results_store.load(results_key) if results_key else None
+    if not final:
+        flash("No cleanup results to display — re-open the preview.", "warning")
+        return redirect(url_for("admin_cleanup_preview", date=target_date))
+
+    return render_template(
+        "cleanup_duplicates.html",
+        preview=final.get("preview") or _build_cleanup_preview(target_date),
+        executed=True,
+        deleted=final.get("deleted", []),
+        failed=final.get("failed", []),
+        pruned=final.get("pruned", 0),
+    )
+
+
+# =============================================================================
+# Admin: clear invoice_history (for use after a manual QBO wipe)
+# =============================================================================
+
+
+def _invoice_history_count() -> int:
+    from src.db.connection import db_cursor
+
+    with db_cursor() as cursor:
+        cursor.execute("SELECT COUNT(*) FROM invoice_history")
+        row = cursor.fetchone()
+        return int(row[0]) if row else 0
+
+
+@app.route("/admin/clear-invoice-history")
+@require_qbo_auth
+def admin_clear_history_preview():
+    """Confirm-page for wiping invoice_history.
+
+    The idempotency check at /create-invoices treats any matching row in
+    invoice_history as a "skip" — so stale rows (pointing at QBO invoices
+    that have since been deleted) cause silent skip-creates on the next run.
+    Clearing the table after a manual QBO wipe restores a clean slate.
+    """
+    try:
+        count = _invoice_history_count()
+    except Exception as e:
+        logger.exception("Failed to count invoice_history rows")
+        flash(f"Could not read invoice_history: {e}", "error")
+        return redirect(url_for("index"))
+
+    confirm_token = secrets.token_urlsafe(16)
+    session["clear_history_confirm_token"] = confirm_token
+
+    return render_template(
+        "clear_invoice_history.html",
+        row_count=count,
+        confirm_token=confirm_token,
+        executed=False,
+        deleted=0,
+    )
+
+
+@app.route("/admin/clear-invoice-history", methods=["POST"])
+@require_qbo_auth
+def admin_clear_history_execute():
+    """Truncate invoice_history after a confirmation token check."""
+    from src.db.connection import db_cursor
+
+    submitted_token = request.form.get("confirm_token")
+    expected_token = session.pop("clear_history_confirm_token", None)
+    if not submitted_token or submitted_token != expected_token:
+        flash(
+            "Confirmation expired or invalid — re-open the preview.",
+            "error",
+        )
+        return redirect(url_for("admin_clear_history_preview"))
+
+    try:
+        with db_cursor() as cursor:
+            cursor.execute("DELETE FROM invoice_history")
+            deleted = int(cursor.rowcount or 0)
+    except Exception as e:
+        logger.exception("Failed to clear invoice_history")
+        flash(f"Failed to clear invoice_history: {e}", "error")
+        return redirect(url_for("admin_clear_history_preview"))
+
+    logger.warning("invoice_history cleared via /admin: deleted=%d rows", deleted)
+
+    return render_template(
+        "clear_invoice_history.html",
+        row_count=0,
+        confirm_token=None,
+        executed=True,
+        deleted=deleted,
+    )
 
 
 # =============================================================================

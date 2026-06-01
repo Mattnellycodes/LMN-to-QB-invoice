@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+
+{% block title %}Cleanup Invoices{% endblock %}
+
+{% block content %}
+<h1>Cleanup Invoices for {{ preview.target_date }}</h1>
+<p class="text-muted">
+    {{ preview.all_targets|length }} invoice(s) — {{ preview.history_count }} from invoice_history,
+    {{ preview.orphan_count }} QBO orphan(s) (created today but not in invoice_history).
+    Total: ${{ "%.2f"|format(preview.total_amount_sum) }}.
+</p>
+
+{% if executed %}
+<h2 class="mt-20">Execution Results</h2>
+<table>
+    <tr>
+        <th>Successfully Deleted</th>
+        <td class="text-right">{{ deleted|length }}</td>
+    </tr>
+    <tr>
+        <th>Failed</th>
+        <td class="text-right">{{ failed|length }}</td>
+    </tr>
+    <tr>
+        <th>invoice_history Rows Pruned</th>
+        <td class="text-right">{{ pruned }}</td>
+    </tr>
+</table>
+
+{% if failed %}
+<h3 class="mt-20">Failed</h3>
+<table>
+    <thead>
+        <tr>
+            <th>Source</th>
+            <th>Label</th>
+            <th>Invoice #</th>
+            <th>QBO ID</th>
+            <th>Error</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for f in failed %}
+        <tr>
+            <td>{{ f.source }}</td>
+            <td>{{ f.label }}</td>
+            <td>{{ f.qbo_invoice_number }}</td>
+            <td>{{ f.qbo_invoice_id }}</td>
+            <td class="text-muted">{{ f.error }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endif %}
+
+{% if deleted %}
+<h3 class="mt-20">Deleted</h3>
+<table>
+    <thead>
+        <tr>
+            <th>Source</th>
+            <th>Label</th>
+            <th>Invoice #</th>
+            <th>QBO ID</th>
+            <th class="text-right">Total</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for d in deleted %}
+        <tr>
+            <td>{{ d.source }}</td>
+            <td>{{ d.label }}</td>
+            <td>{{ d.qbo_invoice_number }}</td>
+            <td>{{ d.qbo_invoice_id }}</td>
+            <td class="text-right">${{ "%.2f"|format(d.total_amount or 0) }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endif %}
+
+<div class="home-actions mt-20">
+    <a href="{{ url_for('index') }}" class="btn btn-secondary">Back to Home</a>
+</div>
+
+{% else %}
+
+{% if preview.cross_check_error %}
+<p class="text-muted">⚠️ QBO cross-check failed (orphan list may be incomplete): {{ preview.cross_check_error }}</p>
+{% endif %}
+
+<h2 class="mt-20">Will Delete All {{ preview.all_targets|length }} Invoice(s)</h2>
+{% if preview.all_targets %}
+<table>
+    <thead>
+        <tr>
+            <th>Source</th>
+            <th>Label</th>
+            <th>Invoice #</th>
+            <th>QBO ID</th>
+            <th class="text-right">Total</th>
+            <th>Created</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for t in preview.all_targets %}
+        <tr>
+            <td>{{ t.source }}</td>
+            <td>{{ t.label }}</td>
+            <td>{{ t.qbo_invoice_number or '—' }}</td>
+            <td>{{ t.qbo_invoice_id }}</td>
+            <td class="text-right">${{ "%.2f"|format(t.total_amount or 0) }}</td>
+            <td class="text-muted">{{ t.created_at }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p class="text-muted">No invoices found for this date.</p>
+{% endif %}
+
+<form method="POST" action="{{ url_for('admin_cleanup_execute') }}" class="mt-20"
+      onsubmit="return confirm('Delete {{ preview.all_targets|length }} invoice(s) from QuickBooks? This is production and cannot be undone.');">
+    <input type="hidden" name="confirm_token" value="{{ confirm_token }}">
+    <button type="submit" class="btn" {% if not preview.all_targets %}disabled{% endif %}>
+        Delete all {{ preview.all_targets|length }} invoice(s)
+    </button>
+    <a href="{{ url_for('index') }}" class="btn btn-secondary">Cancel</a>
+</form>
+
+{% endif %}
+{% endblock %}

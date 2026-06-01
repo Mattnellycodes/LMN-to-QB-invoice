@@ -24,13 +24,15 @@ from src.parsing.pdf_parser import (
     LineItem,
     ParsedReport,
     Task,
+    lmn_date_sort_key,
     parse_money,
 )
 
 logger = logging.getLogger(__name__)
 
 
-BILLABLE_COST_CODE = "200"
+BILLABLE_COST_CODE = "200"  # Maintenance cost code; kept for tests' use, no longer used as a filter.
+IRRIGATION_COST_CODE = "100"  # Installation; classifies a rollup as irrigation work.
 
 NO_SHOP_ALLOCATION_PATH = (
     Path(__file__).resolve().parents[2] / "config" / "no_shop_allocation.txt"
@@ -83,6 +85,15 @@ class JobsiteRollup:
     # on (date, foreman, notes) and preserved in first-seen order. Shown to
     # the reviewer on the invoice preview; not pushed to QBO.
     task_notes: list[dict] = field(default_factory=list)
+    # True if this rollup's first task carried `cost_code_num == "100"`
+    # (Installation = irrigation). Drives invoice-side class tagging without
+    # leaking QBO class-name strings into the allocation layer.
+    is_irrigation: bool = False
+    # When this rollup is a synthetic merge of several real rollups (see
+    # src/invoice/bundles.py), `member_rollups` lists the originals so the
+    # invoice builder can emit one InvoiceSource per contributing jobsite.
+    # Empty for non-bundled rollups.
+    member_rollups: list["JobsiteRollup"] = field(default_factory=list)
 
     @property
     def work_hours(self) -> float:
@@ -94,7 +105,9 @@ class JobsiteRollup:
 
     @property
     def work_dates(self) -> list[str]:
-        return sorted({date for date, _ in self.work_by_date_foreman})
+        return sorted(
+            {date for date, _ in self.work_by_date_foreman}, key=lmn_date_sort_key
+        )
 
     @property
     def foremen(self) -> list[str]:
@@ -133,10 +146,10 @@ def compute(
     rollups: dict[str, JobsiteRollup] = {}
 
     # Pass 1: accumulate billable work hours, services, and hourly rate.
+    # Every non-*SHOP task contributes — cost code only determines whether
+    # the resulting rollup is classified as irrigation (CC 100) or not.
     for task in report.tasks:
         if task.jobsite_id == SHOP_JOBSITE_ID:
-            continue
-        if task.cost_code_num != BILLABLE_COST_CODE:
             continue
 
         rollup = rollups.get(task.jobsite_id)
@@ -144,6 +157,7 @@ def compute(
             rollup = JobsiteRollup(
                 jobsite_id=task.jobsite_id,
                 customer_name=task.customer_name,
+                is_irrigation=(task.cost_code_num == IRRIGATION_COST_CODE),
             )
             rollups[task.jobsite_id] = rollup
 

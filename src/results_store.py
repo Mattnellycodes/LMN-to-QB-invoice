@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import tempfile
 import time
 import uuid
@@ -39,6 +40,12 @@ def _path_for(key: str) -> Path:
     if not key or not all(c.isalnum() or c == "-" for c in key):
         raise ValueError(f"invalid results key: {key!r}")
     return _store_dir() / f"{key}.json"
+
+
+def _progress_path_for(key: str) -> Path:
+    if not key or not all(c.isalnum() or c == "-" for c in key):
+        raise ValueError(f"invalid results key: {key!r}")
+    return _store_dir() / f"{key}.progress.json"
 
 
 def save(result: dict) -> str:
@@ -90,6 +97,37 @@ def delete(key: str | None) -> None:
         path.unlink(missing_ok=True)
     except OSError as e:
         logger.warning("Failed to delete results key=%s: %s", key, e)
+
+
+def save_progress(key: str, progress: dict) -> None:
+    """Atomically write a small progress sidecar for `key`.
+
+    Used by the background invoice-creation thread so the polling endpoint can
+    read live status. Atomic write (temp file + os.replace) prevents the poller
+    from seeing a half-written JSON blob.
+    """
+    path = _progress_path_for(key)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    payload = json.dumps(progress)
+    tmp.write_text(payload, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def load_progress(key: str | None) -> dict | None:
+    """Return the progress sidecar dict, or None if missing/unreadable."""
+    if not key:
+        return None
+    try:
+        path = _progress_path_for(key)
+    except ValueError:
+        return None
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning("Progress unreadable for key=%s: %s", key, e)
+        return None
 
 
 def _cleanup_stale(max_age_seconds: int = _DEFAULT_MAX_AGE_SECONDS) -> None:

@@ -503,6 +503,45 @@ tr:hover td {
     font-size: 0.9rem;
 }
 
+.upload-actions {
+    display: flex;
+    align-items: stretch;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.hardcoded-price-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    max-width: 390px;
+    padding: 10px 12px;
+    background: var(--color-danger-bg);
+    border: 2px solid var(--color-danger);
+    border-radius: var(--radius);
+    color: var(--color-text-heading);
+    cursor: pointer;
+}
+
+.hardcoded-price-toggle input {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--color-danger);
+    flex: 0 0 auto;
+}
+
+.hardcoded-price-toggle strong,
+.hardcoded-price-toggle small {
+    display: block;
+}
+
+.hardcoded-price-toggle small {
+    margin-top: 2px;
+    color: var(--color-text-muted);
+    font-size: 0.78rem;
+    line-height: 1.25;
+}
+
 /* ----- Mapping page ----- */
 
 .mapping-card {
