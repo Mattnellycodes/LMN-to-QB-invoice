@@ -37,7 +37,14 @@
     <tbody>
         {% for inv in successful %}
         <tr>
-            <td>{{ inv.invoice_number or inv.invoice_id }}</td>
+            <td>
+                {% if inv.invoice_id %}
+                <a href="{{ qbo_app_base }}/app/invoice?txnId={{ inv.invoice_id }}"
+                   target="_blank" rel="noopener">{{ inv.invoice_number or inv.invoice_id }}</a>
+                {% else %}
+                {{ inv.invoice_number or inv.invoice_id }}
+                {% endif %}
+            </td>
             <td>{{ inv.customer_name }}</td>
             <td class="text-right">${{ "%.2f"|format(inv.total) }}</td>
         </tr>
