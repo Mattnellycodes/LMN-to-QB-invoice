@@ -1026,7 +1026,14 @@ def invoice_results():
         flash("No invoice results to display.", "warning")
         return redirect(url_for("index"))
 
-    return render_template("invoice_results.html", results=results)
+    qbo_app_base = (
+        "https://app.sandbox.qbo.intuit.com"
+        if os.getenv("QBO_ENVIRONMENT", "production") == "sandbox"
+        else "https://app.qbo.intuit.com"
+    )
+    return render_template(
+        "invoice_results.html", results=results, qbo_app_base=qbo_app_base
+    )
 
 
 # =============================================================================
