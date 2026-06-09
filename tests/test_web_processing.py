@@ -4,13 +4,31 @@ from __future__ import annotations
 
 import pytest
 
+from src.calculations.allocation import JobsiteRollup
+from src.mapping.customer_mapping import CustomerMapping
 from src.parsing.pdf_parser import Customer, ParsedReport, Task
 from src.web_processing import (
     ProcessingError,
     UploadedPdf,
     _reject_overlapping_tasks,
+    _stamp_rollup_customer_ids,
     process_uploaded_pdfs,
 )
+
+
+def test_stamp_rollup_customer_ids_stamps_matched_leaves_unmatched_none():
+    rollups = {
+        "A": JobsiteRollup(jobsite_id="A", customer_name="Costa Maint"),
+        "B": JobsiteRollup(jobsite_id="B", customer_name="Costa Irr"),
+    }
+    mappings = {
+        "A": CustomerMapping(
+            jobsite_id="A", qbo_customer_id="QBO-2180", qbo_display_name="Costa"
+        ),
+    }
+    _stamp_rollup_customer_ids(rollups, mappings)
+    assert rollups["A"].qbo_customer_id == "QBO-2180"
+    assert rollups["B"].qbo_customer_id is None
 
 
 def _task(

@@ -34,6 +34,16 @@ logger = logging.getLogger(__name__)
 BILLABLE_COST_CODE = "200"  # Maintenance cost code; kept for tests' use, no longer used as a filter.
 IRRIGATION_COST_CODE = "100"  # Installation; classifies a rollup as irrigation work.
 
+# Distinctive cores of LMN's irrigation labor rate-row descriptions, matched
+# case-insensitively as substrings so town suffixes ("-Bzn", "-Bozeman") and
+# trailing qualifiers ("hourly") are tolerated. A jobsite whose Rates table
+# carries any of these is irrigation work even when CostCode 100 isn't set.
+IRRIGATION_RATE_MARKERS = (
+    "irrigation service call",
+    "irrigation technician",
+    "winterization",
+)
+
 NO_SHOP_ALLOCATION_PATH = (
     Path(__file__).resolve().parents[2] / "config" / "no_shop_allocation.txt"
 )
@@ -85,13 +95,19 @@ class JobsiteRollup:
     # on (date, foreman, notes) and preserved in first-seen order. Shown to
     # the reviewer on the invoice preview; not pushed to QBO.
     task_notes: list[dict] = field(default_factory=list)
-    # True if this rollup's first task carried `cost_code_num == "100"`
-    # (Installation = irrigation). Drives invoice-side class tagging without
+    # True if any of this rollup's tasks is irrigation work — either CostCode
+    # 100 (Installation) or an irrigation labor rate name (see
+    # IRRIGATION_RATE_MARKERS). Drives invoice-side class tagging without
     # leaking QBO class-name strings into the allocation layer.
     is_irrigation: bool = False
+    # QBO customer this jobsite maps to, stamped after allocation from the
+    # customer mapping (see web_processing). Used to merge an irrigation
+    # jobsite onto its maintenance twin even when their names don't align.
+    # None until stamped, or when the jobsite is unmapped.
+    qbo_customer_id: str | None = None
     # When this rollup is a synthetic merge of several real rollups (see
-    # src/invoice/bundles.py), `member_rollups` lists the originals so the
-    # invoice builder can emit one InvoiceSource per contributing jobsite.
+    # `merge_rollups`), `member_rollups` lists the originals so the invoice
+    # builder can emit one InvoiceSource per contributing jobsite.
     # Empty for non-bundled rollups.
     member_rollups: list["JobsiteRollup"] = field(default_factory=list)
 
@@ -132,6 +148,17 @@ def build_shop_pool(tasks: list[Task]) -> dict[tuple[str, str], float]:
     return dict(pool)
 
 
+def _is_irrigation_for_task(task: Task) -> bool:
+    """True if a task is irrigation work, by cost code or its labor rate name."""
+    if task.cost_code_num == IRRIGATION_COST_CODE:
+        return True
+    for rate_row in task.rates:
+        description = rate_row.description.casefold()
+        if any(marker in description for marker in IRRIGATION_RATE_MARKERS):
+            return True
+    return False
+
+
 def compute(
     report: ParsedReport,
     excluded_from_shop: frozenset[str] = frozenset(),
@@ -157,9 +184,13 @@ def compute(
             rollup = JobsiteRollup(
                 jobsite_id=task.jobsite_id,
                 customer_name=task.customer_name,
-                is_irrigation=(task.cost_code_num == IRRIGATION_COST_CODE),
             )
             rollups[task.jobsite_id] = rollup
+
+        # Any task can flag the jobsite as irrigation; the irrigation rate may
+        # appear on a later task than the first one seen for this jobsite.
+        if not rollup.is_irrigation:
+            rollup.is_irrigation = _is_irrigation_for_task(task)
 
         if task.date and task.foreman:
             key = (task.date, task.foreman)
@@ -249,6 +280,43 @@ def compute(
         )
 
     return AllocationResult(rollups=rollups, shop_pool=shop_pool)
+
+
+def merge_rollups(
+    members: list[JobsiteRollup],
+    *,
+    primary_jobsite_id: str,
+    display_name: str,
+    is_irrigation: bool,
+) -> JobsiteRollup:
+    """Merge member rollups into one synthetic rollup.
+
+    Sums work_by_date_foreman and allocated_drive_hours, concatenates
+    services and task_notes (de-duped), takes the first non-zero
+    hourly_rate / hourly_rate_name encountered. The originals are kept in
+    `member_rollups` so the invoice builder can emit one InvoiceSource per
+    contributing jobsite.
+    """
+    merged = JobsiteRollup(
+        jobsite_id=primary_jobsite_id,
+        customer_name=display_name,
+        is_irrigation=is_irrigation,
+    )
+    for r in members:
+        for key, hours in r.work_by_date_foreman.items():
+            merged.work_by_date_foreman[key] = (
+                merged.work_by_date_foreman.get(key, 0.0) + hours
+            )
+        merged.allocated_drive_hours += r.allocated_drive_hours
+        merged.services.extend(r.services)
+        if merged.hourly_rate == 0.0 and r.hourly_rate > 0:
+            merged.hourly_rate = r.hourly_rate
+            merged.hourly_rate_name = r.hourly_rate_name
+        for note in r.task_notes:
+            if note not in merged.task_notes:
+                merged.task_notes.append(note)
+    merged.member_rollups = list(members)
+    return merged
 
 
 def _service_to_dict(service: LineItem, task: Task) -> dict:

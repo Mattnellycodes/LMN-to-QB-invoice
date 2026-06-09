@@ -118,6 +118,59 @@ class TestPairRollups:
         assert any("Ambiguous maintenance name" in r.message for r in caplog.records)
 
 
+class TestPairByQboCustomerId:
+    def test_join_when_names_differ(self):
+        # The core bug: twins whose names don't align still merge by QBO id.
+        maint = _rollup("1000001A", "Costa Maintenance", is_irrigation=False)
+        irr = _rollup("1000002A", "Bridgid Costa Sprinklers", is_irrigation=True)
+        maint.qbo_customer_id = irr.qbo_customer_id = "QBO-2180"
+        groups = pair_rollups([maint, irr])
+        assert len(groups) == 1
+        assert groups[0].maintenance is maint
+        assert groups[0].irrigation is irr
+
+    def test_multiple_irrigation_rollups_merged_into_one(self):
+        maint = _rollup("1000001A", "Big Customer", is_irrigation=False)
+        irr_a = _rollup("1000002A", "Zone A", is_irrigation=True)
+        irr_b = _rollup("1000003A", "Zone B", is_irrigation=True)
+        for r in (maint, irr_a, irr_b):
+            r.qbo_customer_id = "QBO-300"
+        groups = pair_rollups([maint, irr_a, irr_b])
+        assert len(groups) == 1
+        assert groups[0].maintenance is maint
+        merged_irr = groups[0].irrigation
+        assert merged_irr.is_irrigation is True
+        assert {m.jobsite_id for m in merged_irr.member_rollups} == {
+            "1000002A",
+            "1000003A",
+        }
+
+    def test_ambiguous_two_maintenance_falls_back_to_name(self, caplog):
+        # Two maintenance jobsites under one QBO customer is ambiguous, so the
+        # id-join declines and the name fallback runs. Names don't match here,
+        # so all three end up standalone.
+        m1 = _rollup("1000001A", "Acme North", is_irrigation=False)
+        m2 = _rollup("1000003A", "Acme South", is_irrigation=False)
+        irr = _rollup("1000002A", "Acme Irrigation", is_irrigation=True)
+        for r in (m1, m2, irr):
+            r.qbo_customer_id = "QBO-400"
+        with caplog.at_level("WARNING"):
+            groups = pair_rollups([m1, m2, irr])
+        assert len(groups) == 3
+        assert all(not (g.maintenance and g.irrigation) for g in groups)
+        assert any("Ambiguous QBO customer" in r.message for r in caplog.records)
+
+    def test_unmapped_rollups_use_name_fallback(self):
+        # No qbo_customer_id -> behaves exactly like the legacy name pairing.
+        maint = _rollup("1000001A", "Smith Residence")
+        irr = _rollup("1000002A", "Smith Residence - Irr.")
+        assert maint.qbo_customer_id is None and irr.qbo_customer_id is None
+        groups = pair_rollups([maint, irr])
+        assert len(groups) == 1
+        assert groups[0].maintenance is maint
+        assert groups[0].irrigation is irr
+
+
 # ---------- Merged invoice build ----------
 
 class TestBuildInvoiceForGroup:
