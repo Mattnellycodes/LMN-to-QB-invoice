@@ -30,7 +30,7 @@ import re
 from dataclasses import dataclass
 from typing import Iterable
 
-from src.calculations.allocation import JobsiteRollup
+from src.calculations.allocation import JobsiteRollup, merge_rollups
 from src.invoice.irrigation import RollupGroup
 
 logger = logging.getLogger(__name__)
@@ -65,41 +65,6 @@ def _find_bundle(rollup: JobsiteRollup) -> JobsiteBundle | None:
     return None
 
 
-def _merge_rollups(
-    members: list[JobsiteRollup],
-    *,
-    primary_jobsite_id: str,
-    display_name: str,
-    is_irrigation: bool,
-) -> JobsiteRollup:
-    """Merge member rollups into one synthetic rollup.
-
-    Sums work_by_date_foreman and allocated_drive_hours, concatenates
-    services and task_notes (de-duped), takes the first non-zero
-    hourly_rate / hourly_rate_name encountered.
-    """
-    merged = JobsiteRollup(
-        jobsite_id=primary_jobsite_id,
-        customer_name=display_name,
-        is_irrigation=is_irrigation,
-    )
-    for r in members:
-        for key, hours in r.work_by_date_foreman.items():
-            merged.work_by_date_foreman[key] = (
-                merged.work_by_date_foreman.get(key, 0.0) + hours
-            )
-        merged.allocated_drive_hours += r.allocated_drive_hours
-        merged.services.extend(r.services)
-        if merged.hourly_rate == 0.0 and r.hourly_rate > 0:
-            merged.hourly_rate = r.hourly_rate
-            merged.hourly_rate_name = r.hourly_rate_name
-        for note in r.task_notes:
-            if note not in merged.task_notes:
-                merged.task_notes.append(note)
-    merged.member_rollups = list(members)
-    return merged
-
-
 def apply_bundles(
     rollups: Iterable[JobsiteRollup],
 ) -> tuple[list[JobsiteRollup], list[RollupGroup]]:
@@ -129,7 +94,7 @@ def apply_bundles(
         irr_members = [m for m in members if m.is_irrigation]
 
         maint_synth = (
-            _merge_rollups(
+            merge_rollups(
                 maint_members,
                 primary_jobsite_id=bundle.primary_jobsite_id,
                 display_name=bundle.display_name,
@@ -139,7 +104,7 @@ def apply_bundles(
             else None
         )
         irr_synth = (
-            _merge_rollups(
+            merge_rollups(
                 irr_members,
                 primary_jobsite_id=bundle.primary_jobsite_id,
                 display_name=bundle.display_name,

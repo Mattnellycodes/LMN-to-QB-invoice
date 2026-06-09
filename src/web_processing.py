@@ -10,7 +10,11 @@ from hashlib import sha256
 from io import BytesIO
 from typing import Any, Callable, Dict, List, Optional
 
-from src.calculations.allocation import compute, load_excluded_jobsites
+from src.calculations.allocation import (
+    JobsiteRollup,
+    compute,
+    load_excluded_jobsites,
+)
 from src.db.connection import db_cursor
 from src.db.invoice_history import _query_overlapping_pairs, find_already_invoiced
 from src.invoice.line_items import (
@@ -23,6 +27,7 @@ from src.invoice.line_items import (
     load_included_items,
 )
 from src.mapping.customer_mapping import (
+    CustomerMapping,
     find_unmapped_jobsites,
     load_mapping_from_lmn_api,
 )
@@ -229,6 +234,21 @@ def _reject_overlapping_tasks(parsed_reports: list[tuple[str, ParsedReport]]) ->
             seen[key] = filename
 
 
+def _stamp_rollup_customer_ids(
+    rollups: Dict[str, JobsiteRollup],
+    mappings: Dict[str, CustomerMapping],
+) -> None:
+    """Stamp each rollup with its mapped QBO customer id (None if unmapped).
+
+    Lets `pair_rollups` merge an irrigation jobsite onto its maintenance twin
+    by shared QBO customer, independent of their LMN names.
+    """
+    for jobsite_id, rollup in rollups.items():
+        mapping = mappings.get(str(jobsite_id))
+        if mapping:
+            rollup.qbo_customer_id = mapping.qbo_customer_id
+
+
 def _process_parsed_report(
     report: ParsedReport,
     upload_label: str,
@@ -268,6 +288,11 @@ def _process_parsed_report(
             logger.exception("Hardcoded price list could not be loaded")
             raise ProcessingError(f"Hardcoded price list could not be loaded: {e}")
 
+    mappings = load_mapping_from_lmn_api()
+    lmn_mapping_count = len(mappings)
+    logger.info("Loaded %d customer mappings from LMN", lmn_mapping_count)
+    _stamp_rollup_customer_ids(allocation.rollups, mappings)
+
     invoice_date = datetime.now().strftime("%Y-%m-%d")
     invoices = build_all_invoices(
         allocation.rollups.values(),
@@ -294,10 +319,6 @@ def _process_parsed_report(
                 item["class_name"] = src.class_name
                 item["index"] = len(zero_price_items)
                 zero_price_items.append(item)
-
-    mappings = load_mapping_from_lmn_api()
-    lmn_mapping_count = len(mappings)
-    logger.info("Loaded %d customer mappings from LMN", lmn_mapping_count)
 
     qbo_customer_emails = _load_qbo_customer_emails()
 

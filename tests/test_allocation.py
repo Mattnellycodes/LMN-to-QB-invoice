@@ -282,3 +282,54 @@ def test_work_dates_sorted_chronologically_not_by_weekday():
     ]
     result = compute(_report(tasks))
     assert result.rollups["A"].work_dates == ["Mon-Apr-27-2026", "Fri-May-1-2026"]
+
+
+def _rated_task(jobsite_id: str, rate_description: str, cost_code: str = "200") -> Task:
+    return Task(
+        date="Mon-Apr-13-2026",
+        customer_name="Cust",
+        jobsite_id=jobsite_id,
+        task_name="Work",
+        cost_code_num=cost_code,
+        foreman="Jenna",
+        task_man_hrs=4.0,
+        rates=[
+            RateRow(
+                description=rate_description,
+                qty="4.0",
+                rate="$70.00",
+                total_price="$280.00",
+            )
+        ],
+    )
+
+
+@pytest.mark.parametrize(
+    "rate_description",
+    [
+        "Irrigation Service Call, hourly-Bzn",
+        "Irrigation Technician Hourly Labor",
+        "Winterization-Bzn",
+    ],
+)
+def test_irrigation_detected_by_rate_name_without_cost_code_100(rate_description):
+    # Cost code is maintenance (200); only the rate name flags irrigation.
+    result = compute(_report([_rated_task("JOB", rate_description, cost_code="200")]))
+    assert result.rollups["JOB"].is_irrigation is True
+
+
+def test_irrigation_rate_on_a_later_task_still_flags_jobsite():
+    tasks = [
+        _rated_task("JOB", "Maintenance Skilled Hourly Labor - TOWN", cost_code="200"),
+        _rated_task("JOB", "Irrigation Technician Hourly Labor", cost_code="200"),
+    ]
+    result = compute(_report(tasks))
+    assert result.rollups["JOB"].is_irrigation is True
+
+
+def test_maintenance_rate_name_is_not_flagged_irrigation():
+    task = _rated_task(
+        "JOB", "Maintenance Skilled Hourly Labor - TOWN", cost_code="200"
+    )
+    result = compute(_report([task]))
+    assert result.rollups["JOB"].is_irrigation is False
