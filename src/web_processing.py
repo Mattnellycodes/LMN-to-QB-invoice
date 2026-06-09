@@ -15,7 +15,8 @@ from src.calculations.allocation import (
     compute,
     load_excluded_jobsites,
 )
-from src.db.invoice_history import find_already_invoiced
+from src.db.connection import db_cursor
+from src.db.invoice_history import _query_overlapping_pairs, find_already_invoiced
 from src.invoice.line_items import (
     MAINTENANCE_CLASS_NAME,
     InvoiceData,
@@ -67,34 +68,36 @@ def check_for_duplicates(invoices: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     """
     duplicates: list[dict] = []
     try:
-        for inv in invoices:
-            sources = inv.get("sources") or []
-            seen_by_invoice_num: dict[str, dict] = {}
-            for src in sources:
-                pairs = src.get("date_foreman_pairs") or []
-                if not pairs:
-                    continue
-                for m in find_already_invoiced(src["jobsite_id"], pairs):
-                    key = m["qbo_invoice_number"] or m.get("qbo_invoice_id") or ""
-                    if key in seen_by_invoice_num:
-                        entry = seen_by_invoice_num[key]
-                        if src["jobsite_id"] not in entry["source_jobsite_ids"]:
-                            entry["source_jobsite_ids"].append(src["jobsite_id"])
-                        entry["overlapping_pairs"] = sorted(
-                            set(entry["overlapping_pairs"])
-                            | set(m["overlapping_pairs"])
-                        )
-                    else:
-                        seen_by_invoice_num[key] = {
-                            "jobsite_id": inv["jobsite_id"],
-                            "source_jobsite_ids": [src["jobsite_id"]],
-                            "customer_name": inv["customer_name"],
-                            "overlapping_pairs": list(m["overlapping_pairs"]),
-                            "qbo_invoice_number": m["qbo_invoice_number"],
-                            "qbo_invoice_id": m["qbo_invoice_id"],
-                            "created_at": m["created_at"],
-                        }
-            duplicates.extend(seen_by_invoice_num.values())
+        with db_cursor() as cursor:
+            for inv in invoices:
+                sources = inv.get("sources") or []
+                seen_by_invoice_num: dict[str, dict] = {}
+                for src in sources:
+                    pairs = src.get("date_foreman_pairs") or []
+                    if not pairs:
+                        continue
+                    matches = _query_overlapping_pairs(cursor, src["jobsite_id"], pairs)
+                    for m in matches:
+                        key = m["qbo_invoice_number"] or m.get("qbo_invoice_id") or ""
+                        if key in seen_by_invoice_num:
+                            entry = seen_by_invoice_num[key]
+                            if src["jobsite_id"] not in entry["source_jobsite_ids"]:
+                                entry["source_jobsite_ids"].append(src["jobsite_id"])
+                            entry["overlapping_pairs"] = sorted(
+                                set(entry["overlapping_pairs"])
+                                | set(m["overlapping_pairs"])
+                            )
+                        else:
+                            seen_by_invoice_num[key] = {
+                                "jobsite_id": inv["jobsite_id"],
+                                "source_jobsite_ids": [src["jobsite_id"]],
+                                "customer_name": inv["customer_name"],
+                                "overlapping_pairs": list(m["overlapping_pairs"]),
+                                "qbo_invoice_number": m["qbo_invoice_number"],
+                                "qbo_invoice_id": m["qbo_invoice_id"],
+                                "created_at": m["created_at"],
+                            }
+                duplicates.extend(seen_by_invoice_num.values())
     except Exception:
         logger.exception("Duplicate detection failed; returning no duplicates")
         return []

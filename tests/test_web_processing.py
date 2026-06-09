@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
+import psycopg2
 import pytest
 
 from src.calculations.allocation import JobsiteRollup
@@ -12,6 +15,7 @@ from src.web_processing import (
     UploadedPdf,
     _reject_overlapping_tasks,
     _stamp_rollup_customer_ids,
+    check_for_duplicates,
     process_uploaded_pdfs,
 )
 
@@ -123,3 +127,75 @@ def test_distinct_pdfs_are_merged_before_processing(monkeypatch):
     assert captured["upload_label"] == "2 PDFs"
     assert sorted(captured["report"].customers) == ["5843557W", "5843558W"]
     assert len(captured["report"].tasks) == 2
+
+
+def _stub_db_cursor(monkeypatch):
+    """Patch web_processing.db_cursor to yield a throwaway cursor; return the mock."""
+    cursor = MagicMock()
+    cm = MagicMock()
+    cm.__enter__ = MagicMock(return_value=cursor)
+    cm.__exit__ = MagicMock(return_value=False)
+    db_cursor_mock = MagicMock(return_value=cm)
+    monkeypatch.setattr("src.web_processing.db_cursor", db_cursor_mock)
+    return db_cursor_mock
+
+
+def test_check_for_duplicates_opens_one_connection_for_whole_batch(monkeypatch):
+    db_cursor_mock = _stub_db_cursor(monkeypatch)
+
+    def fake_query(cursor, jobsite_id, pairs):
+        return [
+            {
+                "overlapping_pairs": list(pairs),
+                "qbo_invoice_number": "26-00001",
+                "qbo_invoice_id": "1001",
+                "created_at": "2026-05-01T12:00:00",
+            }
+        ]
+
+    monkeypatch.setattr("src.web_processing._query_overlapping_pairs", fake_query)
+
+    invoices = [
+        {
+            "jobsite_id": "A",
+            "customer_name": "Cust A",
+            "sources": [
+                {"jobsite_id": "A", "date_foreman_pairs": ["2026-04-13|Jenna"]},
+                {"jobsite_id": "A-Irr", "date_foreman_pairs": ["2026-04-14|Jenna"]},
+            ],
+        },
+        {
+            "jobsite_id": "B",
+            "customer_name": "Cust B",
+            "sources": [
+                {"jobsite_id": "B", "date_foreman_pairs": ["2026-04-15|Cassie"]},
+            ],
+        },
+    ]
+
+    result = check_for_duplicates(invoices)
+
+    db_cursor_mock.assert_called_once()
+    assert {d["jobsite_id"] for d in result} == {"A", "B"}
+    # Both sources of invoice A share one prior invoice number -> one merged row.
+    a_row = next(d for d in result if d["jobsite_id"] == "A")
+    assert sorted(a_row["source_jobsite_ids"]) == ["A", "A-Irr"]
+
+
+def test_check_for_duplicates_returns_empty_when_db_unavailable(monkeypatch):
+    def boom():
+        raise psycopg2.OperationalError("connection timed out")
+
+    monkeypatch.setattr("src.web_processing.db_cursor", boom)
+
+    invoices = [
+        {
+            "jobsite_id": "A",
+            "customer_name": "Cust A",
+            "sources": [
+                {"jobsite_id": "A", "date_foreman_pairs": ["2026-04-13|Jenna"]},
+            ],
+        }
+    ]
+
+    assert check_for_duplicates(invoices) == []
