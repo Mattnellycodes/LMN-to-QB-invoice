@@ -62,5 +62,8 @@ data/
 # Sample Sheets
 Sample Time Sheets
 
+# Real Google Sheet snapshots used for local tuning (contain client PII)
+tools/irrigation_match/sample_data/
+
 # Local admin/maintenance scripts (not shipped)
 scripts/
