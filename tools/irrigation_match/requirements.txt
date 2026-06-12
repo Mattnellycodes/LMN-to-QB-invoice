@@ -1,0 +1,4 @@
+# Live access uses the Apps Script web app over HTTPS — requests only.
+# Offline/snapshot mode additionally needs openpyxl.
+requests>=2.31.0
+openpyxl>=3.1.0
